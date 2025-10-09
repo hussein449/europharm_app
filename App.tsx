@@ -1,20 +1,42 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react'
+import { StatusBar } from 'expo-status-bar'
+import HomeScreen from './components/HomeScreen'
+import LoginScreen from './login'
+import ProspectsList from './components/ProspectsList'
+
+export type AppUser = { id: string; username: string }
+type Screen = 'home' | 'prospects'
 
 export default function App() {
-  return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
-  );
-}
+  const [user, setUser] = useState<AppUser | null>(null)
+  const [screen, setScreen] = useState<Screen>('home')
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
+  if (!user) {
+    return (
+      <>
+        <StatusBar style="dark" />
+        <LoginScreen onSuccess={(u) => setUser(u)} />
+      </>
+    )
+  }
+
+  return (
+    <>
+      <StatusBar style="dark" />
+      {screen === 'home' ? (
+        <HomeScreen
+          onSelect={(key) => {
+            if (key === 'prospects') setScreen('prospects')
+            // add more keys later
+          }}
+        />
+      ) : (
+        <ProspectsList
+          onBack={() => setScreen('home')}
+          onView={(p) => alert(`View info for ${p.name} (${p.code})`)}
+          onEdit={(p) => alert(`Edit info for ${p.name} (${p.code})`)}
+        />
+      )}
+    </>
+  )
+}
