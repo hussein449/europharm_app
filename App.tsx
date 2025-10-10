@@ -3,9 +3,12 @@ import { StatusBar } from 'expo-status-bar'
 import HomeScreen from './components/HomeScreen'
 import LoginScreen from './login'
 import ProspectsList from './components/ProspectsList'
+import ProductsReview from './components/ProductsReview'
+import BrochureReview from './components/BrochureReview'
+import VisitsSchedule from './components/VisitsSchedule' // <-- added
 
 export type AppUser = { id: string; username: string }
-type Screen = 'home' | 'prospects'
+type Screen = 'home' | 'prospects' | 'products' | 'brochures' | 'visits' // <-- added 'visits'
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null)
@@ -23,20 +26,26 @@ export default function App() {
   return (
     <>
       <StatusBar style="dark" />
-      {screen === 'home' ? (
+      {screen === 'home' && (
         <HomeScreen
           onSelect={(key) => {
             if (key === 'prospects') setScreen('prospects')
-            // add more keys later
+            if (key === 'products') setScreen('products')
+            if (key === 'brochures') setScreen('brochures')
+            if (key === 'opportunities') setScreen('visits') // <-- open Visits & Schedule
           }}
         />
-      ) : (
-        <ProspectsList
-          onBack={() => setScreen('home')}
-          onView={(p) => alert(`View info for ${p.name} (${p.code})`)}
-          onEdit={(p) => alert(`Edit info for ${p.name} (${p.code})`)}
-        />
       )}
+
+      {screen === 'prospects' && <ProspectsList onBack={() => setScreen('home')} />}
+
+      {screen === 'products' && <ProductsReview onBack={() => setScreen('home')} />}
+
+      {screen === 'brochures' && <BrochureReview onBack={() => setScreen('home')} />}
+
+      {/* {screen === 'visits' && <VisitsSchedule onBack={() => setScreen('home')} />} <-- route */}
+        {screen === 'visits' && <VisitsSchedule onBack={() => setScreen('home')} currentUser={user} />}
+
     </>
   )
 }

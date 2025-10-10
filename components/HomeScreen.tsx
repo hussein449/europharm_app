@@ -23,23 +23,23 @@ export default function HomeScreen({ onSelect }: Props) {
 
   const items = useMemo<Item[]>(
     () => [
-      { key: 'prospects',       title: 'Prospects List',              subtitle: 'All clients',                            icon: '👥' },
-      { key: 'products',        title: 'Products Review',             subtitle: 'All products',                           icon: '📦' },
-      { key: 'cycle',           title: 'Cycle Planning',              subtitle: 'Agenda & routing',                       icon: '🗓️' },
-      { key: 'opportunities',   title: 'Planned Opportunities',       subtitle: 'Visits & schedules',                     icon: '📝' },
-      { key: 'summary',         title: 'Summary',                     subtitle: 'Actions over clients',                   icon: '📒' },
-      { key: 'end_journey',     title: 'End Journey Report',          subtitle: 'تقرير نهاية الرحلة',                    icon: '🛑' },
-      { key: 'daily_collection',title: 'Daily Collection',            subtitle: 'Payments today',                          icon: '💵' },
-      { key: 'assess_objectives',title:'Assess Prospects Objectives', subtitle: 'Manage tasks',                            icon: '✅' },
-      { key: 'visits_history',  title: 'Visits History',              subtitle: 'Past 4 weeks',                            icon: '📊' },
-      { key: 'achievements',    title: 'Achievements Review',         subtitle: 'Attendance & KPIs',                      icon: '📈' },
-      { key: 'view_stock',      title: 'View Stock',                  subtitle: 'Availability & status',                  icon: '🏷️' },
-      { key: 'items_request',   title: 'Items / Samples Request',     subtitle: 'Request more',                            icon: '📦' },
-      { key: 'return_stock',    title: 'Return Stock',                subtitle: 'Process returns',                         icon: '📤' },
-      { key: 'brochures',       title: 'Brochures Review',            subtitle: 'Browse docs',                             icon: '📚' },
-      { key: 'odometer',        title: 'Journey Odometer',            subtitle: 'Distance & logs',                         icon: '🧭' },
-      { key: 'not_visited',     title: 'Not Visited / Freq Not Met',  subtitle: 'Past month gaps',                        icon: '🚫' },
-      { key: 'data_mgmt',       title: 'Data Management',             subtitle: 'Backup & recovery',                      icon: '💽' },
+      { key: 'prospects',        title: 'Prospects List',              subtitle: 'All clients',               icon: '👥' },
+      { key: 'products',         title: 'Products Review',             subtitle: 'All products',              icon: '📦' },
+      { key: 'cycle',            title: 'Cycle Planning',              subtitle: 'Agenda & routing',          icon: '🗓️' },
+      { key: 'opportunities',    title: 'Planned Opportunities',       subtitle: 'Visits & schedules',        icon: '📝' }, // <-- this opens visits
+      { key: 'summary',          title: 'Summary',                     subtitle: 'Actions over clients',      icon: '📒' },
+      { key: 'end_journey',      title: 'End Journey Report',          subtitle: 'تقرير نهاية الرحلة',       icon: '🛑' },
+      { key: 'daily_collection', title: 'Daily Collection',            subtitle: 'Payments today',            icon: '💵' },
+      { key: 'assess_objectives',title:'Assess Prospects Objectives',  subtitle: 'Manage tasks',              icon: '✅' },
+      { key: 'visits_history',   title: 'Visits History',              subtitle: 'Past 4 weeks',              icon: '📊' },
+      { key: 'achievements',     title: 'Achievements Review',         subtitle: 'Attendance & KPIs',         icon: '📈' },
+      { key: 'view_stock',       title: 'View Stock',                  subtitle: 'Availability & status',     icon: '🏷️' },
+      { key: 'items_request',    title: 'Items / Samples Request',     subtitle: 'Request more',              icon: '📦' },
+      { key: 'return_stock',     title: 'Return Stock',                subtitle: 'Process returns',           icon: '📤' },
+      { key: 'brochures',        title: 'Brochures Review',            subtitle: 'Browse docs',               icon: '📚' },
+      { key: 'odometer',         title: 'Journey Odometer',            subtitle: 'Distance & logs',           icon: '🧭' },
+      { key: 'not_visited',      title: 'Not Visited / Freq Not Met',  subtitle: 'Past month gaps',           icon: '🚫' },
+      { key: 'data_mgmt',        title: 'Data Management',             subtitle: 'Backup & recovery',         icon: '💽' },
     ],
     []
   )
@@ -73,7 +73,7 @@ export default function HomeScreen({ onSelect }: Props) {
           {filtered.map((it) => (
             <Pressable
               key={it.key}
-              onPress={() => onSelect?.(it.key)}
+              onPress={() => onSelect?.(it.key)} // <-- passes key; App maps 'opportunities' -> 'visits'
               style={({ pressed }) => [
                 styles.card,
                 {
@@ -111,7 +111,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#f6f7fb',
   },
 
-  // Top app bar with a soft gradient vibe (rn-web friendly via boxShadow)
   appBar: {
     paddingTop: 18,
     paddingBottom: 12,
