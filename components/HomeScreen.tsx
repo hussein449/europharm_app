@@ -33,13 +33,13 @@ export default function HomeScreen({ onSelect }: Props) {
       { key: 'assess_objectives',title:'Assess Prospects Objectives',  subtitle: 'Manage tasks',              icon: '✅' },
       { key: 'visits_history',   title: 'Visits History',              subtitle: 'Past 4 weeks',              icon: '📊' },
       { key: 'achievements',     title: 'Achievements Review',         subtitle: 'Attendance & KPIs',         icon: '📈' },
-      { key: 'view_stock',       title: 'View Stock',                  subtitle: 'Availability & status',     icon: '🏷️' },
-      { key: 'items_request',    title: 'Items / Samples Request',     subtitle: 'Request more',              icon: '📦' },
-      { key: 'return_stock',     title: 'Return Stock',                subtitle: 'Process returns',           icon: '📤' },
+      // { key: 'view_stock',       title: 'View Stock',                  subtitle: 'Availability & status',     icon: '🏷️' },
+      // { key: 'items_request',    title: 'Items / Samples Request',     subtitle: 'Request more',              icon: '📦' },
+      // { key: 'return_stock',     title: 'Return Stock',                subtitle: 'Process returns',           icon: '📤' },
       { key: 'brochures',        title: 'Brochures Review',            subtitle: 'Browse docs',               icon: '📚' },
       { key: 'odometer',         title: 'Journey Odometer',            subtitle: 'Distance & logs',           icon: '🧭' },
       { key: 'not_visited',      title: 'Not Visited / Freq Not Met',  subtitle: 'Past month gaps',           icon: '🚫' },
-      { key: 'data_mgmt',        title: 'Data Management',             subtitle: 'Backup & recovery',         icon: '💽' },
+      // { key: 'data_mgmt',        title: 'Data Management',             subtitle: 'Backup & recovery',         icon: '💽' },
     ],
     []
   )

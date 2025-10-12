@@ -1,3 +1,4 @@
+// components/VisitsSchedule.tsx
 import { useEffect, useMemo, useState } from 'react'
 import {
   View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput, Platform,
@@ -14,12 +15,13 @@ type VisitRow = {
   area?: string | null
   notes?: string | null
   visited_by?: string | null
+  note_type?: 'SALES ORDER' | 'RFR' | 'COLLECTION' | null
 }
 
 type UserLite = { id: string; username: string }
-type Props = { onBack?: () => void; currentUser?: UserLite; onViewMap?: (visitId: string) => void }
+type Props = { onBack?: () => void; currentUser?: UserLite }
 
-export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props) {
+export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth()) // 0-11
@@ -33,8 +35,9 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
   const [activeVisitId, setActiveVisitId] = useState<string | null>(null)
   const [showFinishModal, setShowFinishModal] = useState(false)
   const [summary, setSummary] = useState('')
+  const [noteType, setNoteType] = useState<'SALES ORDER' | 'RFR' | 'COLLECTION'>('SALES ORDER')
 
-  // add visit state
+  // add visit
   const [showAddModal, setShowAddModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newSpec, setNewSpec] = useState('')
@@ -42,35 +45,30 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
   const [newDate, setNewDate] = useState(selectedDay)
 
   const range = monthRange(year, month)
-  const daysGrid = useMemo(() => buildCalendarGrid(year, month), [year, month])
 
+  /* ---------------- load / refresh ---------------- */
   const load = async () => {
     setLoading(true); setErrorMsg(null)
     try {
-      let data: any[] | null = null
-      const rpc = await supabase.rpc('get_visits_range', { p_start: range.start, p_end: range.end })
-      if (!rpc.error && Array.isArray(rpc.data)) {
-        data = rpc.data
-      } else {
-        const { data: sel, error } = await supabase
-          .from('visits')
-          .select('*')
-          .gte('visit_date', range.start)
-          .lte('visit_date', range.end)
-          .order('visit_date', { ascending: true })
-        if (error) throw error
-        data = sel || []
-      }
+      const { data, error } = await supabase
+        .from('visits')
+        .select('id, visit_date, status, client_name, specialty, area, notes, visited_by, note_type')
+        .gte('visit_date', range.start)
+        .lte('visit_date', range.end)
+        .order('visit_date', { ascending: true })
+
+      if (error) throw error
 
       const normalized: VisitRow[] = (data ?? []).map((r: any) => ({
         id: String(r.id),
-        visit_date: (r.visit_date ?? '').slice(0, 10),
+        visit_date: String(r.visit_date ?? '').slice(0, 10),
         status: (r.status ?? 'planned'),
         client_name: String(r.client_name ?? r.client ?? r.name ?? '—'),
-        specialty: r.specialty ?? r.prospect?.specialty ?? '—',
-        area: r.area ?? r.prospect?.area ?? '—',
+        specialty: r.specialty ?? '—',
+        area: r.area ?? '—',
         notes: r.notes ?? null,
         visited_by: r.visited_by ?? null,
+        note_type: r.note_type ?? null,
       }))
 
       setRows(normalized)
@@ -103,82 +101,123 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
 
   const dayVisits = byDate.get(selectedDay) ?? []
 
+  /* ---------------- month nav ---------------- */
   const prevMonth = () => {
     const d = new Date(year, month, 1); d.setMonth(month - 1)
     setYear(d.getFullYear()); setMonth(d.getMonth())
+    // reset journey state switching months
+    setJourneyMode(false); setActiveVisitId(null); setCurrentVisitId(null).catch(()=>{})
   }
   const nextMonth = () => {
     const d = new Date(year, month, 1); d.setMonth(month + 1)
     setYear(d.getFullYear()); setMonth(d.getMonth())
+    setJourneyMode(false); setActiveVisitId(null); setCurrentVisitId(null).catch(()=>{})
   }
 
+  /* ---------------- journey actions ---------------- */
   const startJourney = async () => {
     if (dayVisits.length === 0) return
     try {
       await startTracking(currentUser?.username ?? null)
       setJourneyMode(true)
       setActiveVisitId(null)
-      await setCurrentVisitId(null)  // no active visit until user checks one
+      await setCurrentVisitId(null)
     } catch (e: any) {
       Alert.alert('Location', e?.message ?? 'Failed to start tracking.')
     }
   }
 
+  // Toggle ONLY the tapped visit between planned <-> en_route. Never touch other visits.
   const selectVisit = async (visit: VisitRow) => {
+    if (!journeyMode) return
+    if (showFinishModal) return // don't retoggle while modal is up
+    if (visit.status === 'done' || visit.status === 'skipped') return
+
+    const username = currentUser?.username ?? null
+    const nextStatus = visit.status === 'en_route' ? 'planned' : 'en_route'
+
     try {
-      const username = currentUser?.username ?? null
-
-      // if another visit was active, revert it to planned
-      const prevId = activeVisitId
-      if (prevId && prevId !== visit.id) {
-        await supabase.rpc('set_visit_status', { p_id: prevId, p_status: 'planned', p_user: username })
-        setRows(prev => prev.map(r => r.id === prevId ? { ...r, status: 'planned' } : r))
-      }
-
-      const goingActive = activeVisitId !== visit.id
-      const newStatus = goingActive ? 'en_route' : 'planned'
-      await supabase.rpc('set_visit_status', { p_id: visit.id, p_status: newStatus, p_user: username })
+      // Minimal update (no returning) to avoid 406/PGRST116
+      const { error } = await supabase
+        .from('visits')
+        .update({
+          status: nextStatus,
+          visited_by: nextStatus === 'en_route' ? username : visit.visited_by ?? username,
+        })
+        .eq('id', visit.id)
+      if (error) throw error
 
       setRows(prev => prev.map(r =>
-        r.id === visit.id ? { ...r, status: newStatus, visited_by: goingActive ? (username ?? r.visited_by ?? null) : r.visited_by } : r
+        r.id === visit.id
+          ? { ...r, status: nextStatus, visited_by: nextStatus === 'en_route' ? (username ?? r.visited_by ?? null) : r.visited_by }
+          : r
       ))
-      setActiveVisitId(goingActive ? visit.id : null)
 
-      // link future GPS points to this visit (or unlink)
-      await setCurrentVisitId(goingActive ? visit.id : null)
+      if (nextStatus === 'en_route') {
+        setActiveVisitId(visit.id)
+        await setCurrentVisitId(visit.id)
+      } else {
+        if (activeVisitId === visit.id) {
+          setActiveVisitId(null)
+          await setCurrentVisitId(null)
+        }
+      }
     } catch (e: any) {
-      console.error('set_visit_status error', e)
+      console.error('update visit status error', e)
       Alert.alert('Error', e?.message ?? 'Failed to update status.')
     }
   }
 
   const endJourneyOpen = () => {
-    if (!activeVisitId) return
+    if (!activeVisitId) {
+      Alert.alert('Select a visit', 'Pick a visit (checkbox) to end.')
+      return
+    }
     setSummary('')
+    setNoteType('SALES ORDER')
     setShowFinishModal(true)
   }
 
+  // *** FIXED: no .select() on update; handle 406/PGRST116; clear state before reload ***
   const endJourneyConfirm = async () => {
-    if (!activeVisitId) return
+    const vid = activeVisitId
+    if (!vid) return
     try {
       const username = currentUser?.username ?? null
-      await supabase.rpc('finish_visit', { p_id: activeVisitId, p_summary: summary, p_user: username })
-      setRows(prev => prev.map(r => r.id === activeVisitId ? { ...r, status: 'done', notes: summary, visited_by: username ?? r.visited_by ?? null } : r))
 
+      const { error: updErr, status } = await supabase
+        .from('visits')
+        .update({
+          status: 'done',
+          notes: summary,
+          visited_by: username,
+          note_type: noteType,
+        })
+        .eq('id', vid)
+
+      if (updErr && updErr.code !== 'PGRST116' && status !== 406) {
+        throw updErr
+      }
+
+      // Stop tracking + clear local state BEFORE reload
       await stopTracking()
       await setCurrentVisitId(null)
-
-      setActiveVisitId(null)
-      setJourneyMode(false)
       setShowFinishModal(false)
-      if (Platform.OS === 'web') console.log('Visit finished with summary:', summary)
+      setJourneyMode(false)
+      setActiveVisitId(null)
+      setSummary('')
+
+      // Reload to reflect DB truth (prevents any re-toggle)
+      await load()
+
+      if (Platform.OS === 'web') console.log('Visit finished OK', { vid, noteType })
     } catch (e: any) {
-      console.error('finish_visit error', e)
+      console.error('finish visit update error', e)
       Alert.alert('Error', e?.message ?? 'Failed to finish visit.')
     }
   }
 
-  // add visit
+  /* ---------------- add visit ---------------- */
   const openAdd = () => {
     setNewName('')
     setNewSpec('')
@@ -195,36 +234,23 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
       return
     }
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('visits')
-        .insert({
+        .insert([{
           client_name: name,
           specialty: newSpec || null,
           area: newArea || null,
           visit_date: date,
           status: 'planned',
-          visited_by: null, // stamped when en_route/done
-        })
-        .select('*')
-        .single()
+          visited_by: null,
+          note_type: null,
+        }])
 
       if (error) throw error
-      const r = data as any
-      const inserted: VisitRow = {
-        id: String(r.id),
-        visit_date: (r.visit_date ?? '').slice(0, 10),
-        status: r.status ?? 'planned',
-        client_name: r.client_name ?? name,
-        specialty: r.specialty ?? newSpec,
-        area: r.area ?? newArea,
-        notes: r.notes ?? null,
-        visited_by: r.visited_by ?? null,
-      }
-      setRows(prev => [...prev, inserted].sort((a, b) =>
-        a.visit_date.localeCompare(b.visit_date) || a.client_name.localeCompare(b.client_name)
-      ))
+
+      await load()
       setShowAddModal(false)
-      setSelectedDay(inserted.visit_date)
+      setSelectedDay(date)
     } catch (e: any) {
       console.error('add visit error', e)
       Alert.alert('Error', e?.message ?? 'Failed to add visit.')
@@ -239,154 +265,52 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
         <View style={{ width: 40 }} />
       </View>
 
-      <View style={styles.calendarWrap}>
-        <View style={styles.calHeader}>
-          <Pressable onPress={prevMonth} style={styles.navBtn}><Text style={styles.navTxt}>‹</Text></Pressable>
-          <Text style={styles.monthTitle}>{monthLabel(year, month)}</Text>
-          <Pressable onPress={nextMonth} style={styles.navBtn}><Text style={styles.navTxt}>›</Text></Pressable>
-        </View>
+      {/* Calendar */}
+      <Calendar
+        year={year} month={month} prevMonth={prevMonth} nextMonth={nextMonth}
+        selectedDay={selectedDay} onSelectDay={setSelectedDay}
+        byDate={byDate}
+        loading={loading} errorMsg={errorMsg} reload={load}
+      />
 
-        <View style={styles.weekHeader}>
-          {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
-            <Text key={d} style={styles.weekHeadTxt}>{d}</Text>
-          ))}
-        </View>
-
-        {loading ? (
-          <View style={{ padding: 20, alignItems: 'center' }}><ActivityIndicator /></View>
-        ) : errorMsg ? (
-          <View style={{ padding: 16 }}>
-            <Text style={{ color: '#b91c1c', fontWeight: '800' }}>{errorMsg}</Text>
-            <Pressable onPress={load} style={[styles.btn, styles.btnPrimary, { marginTop: 10, alignSelf: 'flex-start' }]}>
-              <Text style={styles.btnPrimaryText}>Retry</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.grid}>
-            {daysGrid.map((week, wi) => (
-              <View key={wi} style={styles.row}>
-                {week.map((cell) => {
-                  const key = `${cell.year}-${String(cell.month+1).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`
-                  const inMonth = cell.month === month
-                  const isSel = key === selectedDay
-                  const dots = (byDate.get(key) || []).length
-                  return (
-                    <Pressable
-                      key={key}
-                      onPress={() => setSelectedDay(key)}
-                      style={[
-                        styles.cell,
-                        !inMonth && styles.cellMuted,
-                        isSel && styles.cellSelected,
-                      ]}
-                    >
-                      <Text style={[styles.cellTxt, !inMonth && { color: '#94a3b8' }]}>{cell.day}</Text>
-                      {dots > 0 && (
-                        <View style={styles.dotRow}>
-                          {Array.from({ length: Math.min(dots, 3) }).map((_, i) => (
-                            <View key={i} style={styles.dot} />
-                          ))}
-                          {dots > 3 && <Text style={styles.dotMore}>+{dots-3}</Text>}
-                        </View>
-                      )}
-                    </Pressable>
-                  )
-                })}
-              </View>
-            ))}
-          </View>
-        )}
-      </View>
-
-      <View style={styles.listWrap}>
-        <View style={styles.listHead}>
-          <Text style={styles.listTitle}>Visits on {selectedDay}</Text>
-
-          {journeyMode ? (
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={() => activeVisitId && onViewMap?.(activeVisitId)}
-                disabled={!activeVisitId}
-                style={[styles.mapBtn, !activeVisitId && { opacity: 0.5 }]}
-              >
-                <Text style={styles.mapBtnTxt}>View Route</Text>
-              </Pressable>
-              <Pressable
-                onPress={endJourneyOpen}
-                disabled={!activeVisitId}
-                style={[styles.endBtn, !activeVisitId && { opacity: 0.5 }]}
-              >
-                <Text style={styles.endBtnTxt}>End Journey</Text>
-              </Pressable>
-              <Pressable onPress={openAdd} style={styles.addBtn}>
-                <Text style={styles.addBtnTxt}>+ Add</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={startJourney}
-                disabled={dayVisits.length === 0}
-                style={[styles.startBtn, dayVisits.length === 0 && { opacity: 0.5 }]}
-              >
-                <Text style={styles.startBtnTxt}>Start Journey</Text>
-              </Pressable>
-              <Pressable onPress={openAdd} style={styles.addBtn}>
-                <Text style={styles.addBtnTxt}>+ Add</Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
-
-        {loading ? (
-          <View style={{ padding: 12 }}><ActivityIndicator /></View>
-        ) : dayVisits.length === 0 ? (
-          <Text style={{ color: '#6b7280', paddingHorizontal: 16 }}>No visits planned.</Text>
-        ) : (
-          <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}>
-            {dayVisits.map(v => {
-              const isActive = journeyMode && activeVisitId === v.id
-              return (
-                <View key={v.id} style={[styles.card, isActive && { borderColor: '#2563eb' }]}>
-                  {journeyMode ? (
-                    <Pressable
-                      onPress={() => selectVisit(v)}
-                      style={[styles.checkbox, isActive && styles.checkboxChecked]}
-                    >
-                      {isActive ? <Text style={styles.checkboxTick}>✓</Text> : null}
-                    </Pressable>
-                  ) : null}
-
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>{v.client_name || '—'}</Text>
-                    <Text style={styles.cardSub} numberOfLines={1}>
-                      {(v.specialty || '—')} • {(v.area || '—')}
-                    </Text>
-                    {!!v.visited_by && (
-                      <Text style={styles.cardMeta} numberOfLines={1}>
-                        Visitor: {v.visited_by}
-                      </Text>
-                    )}
-                  </View>
-
-                  <StatusChip status={isActive ? 'en_route' : v.status} />
-                </View>
-              )
-            })}
-          </ScrollView>
-        )}
-      </View>
+      {/* Day list */}
+      <DayList
+        selectedDay={selectedDay}
+        dayVisits={byDate.get(selectedDay) ?? []}
+        journeyMode={journeyMode}
+        activeVisitId={activeVisitId}
+        startJourney={startJourney}
+        openAdd={openAdd}
+        endJourneyOpen={endJourneyOpen}
+        selectVisit={selectVisit}
+        showFinishModal={showFinishModal}
+      />
 
       {/* Finish modal */}
       {showFinishModal && (
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>End Journey</Text>
-            <Text style={styles.modalSub}>Add a short summary for this visit.</Text>
+            <Text style={styles.modalSub}>Add a summary and select a type.</Text>
+
+            <Text style={styles.inputLabel}>Note type*</Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+              {(['SALES ORDER','RFR','COLLECTION'] as const).map(opt => (
+                <Pressable
+                  key={opt}
+                  onPress={() => setNoteType(opt)}
+                  style={[styles.pill, noteType === opt ? styles.pillOn : styles.pillOff]}
+                >
+                  <Text style={noteType === opt ? styles.pillTxtOn : styles.pillTxtOff}>{opt}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={styles.inputLabel}>Summary</Text>
             <TextInput
               value={summary}
               onChangeText={setSummary}
-              placeholder="Summary…"
+              placeholder="Add visit summary…"
               placeholderTextColor="#9aa0a6"
               multiline
               style={styles.modalInput}
@@ -461,6 +385,137 @@ export default function VisitsSchedule({ onBack, currentUser, onViewMap }: Props
             </View>
           </View>
         </View>
+      )}
+    </View>
+  )
+}
+
+/* ---- Smaller components ---- */
+function Calendar({
+  year, month, prevMonth, nextMonth, selectedDay, onSelectDay, byDate, loading, errorMsg, reload
+}: any) {
+  const daysGrid = buildCalendarGrid(year, month)
+  return (
+    <View style={styles.calendarWrap}>
+      <View style={styles.calHeader}>
+        <Pressable onPress={prevMonth} style={styles.navBtn}><Text style={styles.navTxt}>‹</Text></Pressable>
+        <Text style={styles.monthTitle}>{monthLabel(year, month)}</Text>
+        <Pressable onPress={nextMonth} style={styles.navBtn}><Text style={styles.navTxt}>›</Text></Pressable>
+      </View>
+
+      <View style={styles.weekHeader}>
+        {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d: string) => (
+          <Text key={d} style={styles.weekHeadTxt}>{d}</Text>
+        ))}
+      </View>
+
+      {loading ? (
+        <View style={{ padding: 20, alignItems: 'center' }}><ActivityIndicator /></View>
+      ) : errorMsg ? (
+        <View style={{ padding: 16 }}>
+          <Text style={{ color: '#b91c1c', fontWeight: '800' }}>{errorMsg}</Text>
+          <Pressable onPress={reload} style={[styles.btn, styles.btnPrimary, { marginTop: 10, alignSelf: 'flex-start' }]}>
+            <Text style={styles.btnPrimaryText}>Retry</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={styles.grid}>
+          {daysGrid.map((week: any[], wi: number) => (
+            <View key={wi} style={styles.row}>
+              {week.map((cell: any) => {
+                const key = `${cell.year}-${String(cell.month+1).padStart(2, '0')}-${String(cell.day).padStart(2, '0')}`
+                const inMonth = cell.month === month
+                const isSel = key === selectedDay
+                const dots = (byDate.get(key) || []).length
+                return (
+                  <Pressable
+                    key={key}
+                    onPress={() => onSelectDay(key)}
+                    style={[
+                      styles.cell,
+                      !inMonth && styles.cellMuted,
+                      isSel && styles.cellSelected,
+                    ]}
+                  >
+                    <Text style={[styles.cellTxt, !inMonth && { color: '#94a3b8' }]}>{cell.day}</Text>
+                    {dots > 0 && (
+                      <View style={styles.dotRow}>
+                        {Array.from({ length: Math.min(dots, 3) }).map((_, i) => <View key={i} style={styles.dot} />)}
+                        {dots > 3 && <Text style={styles.dotMore}>+{dots-3}</Text>}
+                      </View>
+                    )}
+                  </Pressable>
+                )
+              })}
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  )
+}
+
+function DayList({
+  selectedDay, dayVisits, journeyMode, activeVisitId, startJourney, openAdd, endJourneyOpen, selectVisit, showFinishModal
+}: any) {
+  return (
+    <View style={styles.listWrap}>
+      <View style={styles.listHead}>
+        <Text style={styles.listTitle}>Visits on {selectedDay}</Text>
+
+        {journeyMode ? (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable onPress={endJourneyOpen} disabled={!activeVisitId} style={[styles.endBtn, !activeVisitId && { opacity: 0.5 }]}>
+              <Text style={styles.endBtnTxt}>End Journey</Text>
+            </Pressable>
+            <Pressable onPress={openAdd} style={styles.addBtn}>
+              <Text style={styles.addBtnTxt}>+ Add</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable onPress={startJourney} disabled={dayVisits.length === 0} style={[styles.startBtn, dayVisits.length === 0 && { opacity: 0.5 }]}>
+              <Text style={styles.startBtnTxt}>Start Journey</Text>
+            </Pressable>
+            <Pressable onPress={openAdd} style={styles.addBtn}>
+              <Text style={styles.addBtnTxt}>+ Add</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+
+      {dayVisits.length === 0 ? (
+        <Text style={{ color: '#6b7280', paddingHorizontal: 16 }}>No visits planned.</Text>
+      ) : (
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+          {dayVisits.map((v: VisitRow) => {
+            const isActive = journeyMode && activeVisitId === v.id
+            const canToggle = journeyMode && !showFinishModal && v.status !== 'done' && v.status !== 'skipped'
+            return (
+              <View key={v.id} style={[styles.card, isActive && { borderColor: '#2563eb' }]}>
+                {canToggle ? (
+                  <Pressable onPress={() => selectVisit(v)} style={[styles.checkbox, isActive && styles.checkboxChecked]}>
+                    {isActive ? <Text style={styles.checkboxTick}>✓</Text> : null}
+                  </Pressable>
+                ) : <View style={{ width: 22 }} />}
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle} numberOfLines={1}>{v.client_name || '—'}</Text>
+                  <Text style={styles.cardSub} numberOfLines={1}>
+                    {(v.specialty || '—')} • {(v.area || '—')}
+                  </Text>
+                  {!!v.visited_by && (
+                    <Text style={styles.cardMeta} numberOfLines={1}>
+                      Visitor: {v.visited_by}{v.note_type ? ` • ${v.note_type}` : ''}
+                    </Text>
+                  )}
+                </View>
+
+                <StatusChip status={isActive ? 'en_route' : v.status} />
+              </View>
+            )
+          })}
+        </ScrollView>
       )}
     </View>
   )
@@ -581,12 +636,6 @@ const styles = StyleSheet.create({
   },
   addBtnTxt: { color: '#fff', fontWeight: '800' },
 
-  mapBtn: {
-    height: 40, paddingHorizontal: 14, borderRadius: 999,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: '#9333ea',
-  },
-  mapBtnTxt: { color: '#fff', fontWeight: '800' },
-
   card: {
     marginTop: 10, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#eef0f3',
     backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -631,8 +680,17 @@ const styles = StyleSheet.create({
   },
 
   inputLabel: { fontSize: 12, color: '#6b7280', marginTop: 6, marginBottom: 4, fontWeight: '700' },
+
   textInput: {
     height: 42, borderRadius: 10, borderWidth: 1, borderColor: '#e5e7eb',
     paddingHorizontal: 10, backgroundColor: '#f9fafb', color: '#0f172a',
   },
+
+  pill: {
+    height: 36, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, alignItems: 'center', justifyContent: 'center',
+  },
+  pillOn: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  pillOff: { backgroundColor: '#fff', borderColor: '#e5e7eb' },
+  pillTxtOn: { color: '#fff', fontWeight: '800' },
+  pillTxtOff: { color: '#111827', fontWeight: '800' },
 })
