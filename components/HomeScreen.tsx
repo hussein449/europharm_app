@@ -38,7 +38,7 @@ export default function HomeScreen({ onSelect }: Props) {
       // { key: 'return_stock',     title: 'Return Stock',                subtitle: 'Process returns',           icon: '📤' },
       { key: 'brochures',        title: 'Brochures Review',            subtitle: 'Browse docs',               icon: '📚' },
       { key: 'odometer',         title: 'Journey Odometer',            subtitle: 'Distance & logs',           icon: '🧭' },
-      { key: 'not_visited',      title: 'Not Visited / Freq Not Met',  subtitle: 'Past month gaps',           icon: '🚫' },
+      // { key: 'not_visited',      title: 'Not Visited / Freq Not Met',  subtitle: 'Past month gaps',           icon: '🚫' },
       // { key: 'data_mgmt',        title: 'Data Management',             subtitle: 'Backup & recovery',         icon: '💽' },
     ],
     []

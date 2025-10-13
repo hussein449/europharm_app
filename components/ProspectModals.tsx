@@ -1,5 +1,5 @@
 // components/ProspectModals.tsx
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Modal,
   View,
@@ -42,19 +42,37 @@ export function ViewProspectModal({
   const [loading, setLoading] = useState(false)
   const [p, setP] = useState<Prospect | null>(null)
 
+  const visitsThisMonth = p?.freq_actual ?? 0
+  const visitedThisMonth = visitsThisMonth > 0
+  const freqRequired = p?.freq_required ?? 0
+  const freqMet = useMemo(
+    () => (freqRequired ? visitsThisMonth >= freqRequired : visitedThisMonth),
+    [visitsThisMonth, freqRequired, visitedThisMonth]
+  )
+
   useEffect(() => {
     let mounted = true
     const run = async () => {
       if (!open || !id) return
       setLoading(true)
       try {
-        const { data, error } = await supabase.rpc('get_prospect', { p_id: id })
+        // Load from the same backend source the list uses (the view with computed freq_actual)
+        const { data, error } = await supabase
+          .from('v_prospects_with_freq_current_month')
+          .select(
+            'id, name, code, specialty, freq_actual, freq_required, phone, mobile, classification, area, address, email, note, status'
+          )
+          .eq('id', id)
+          .maybeSingle()
+
         if (error) throw error
-        if (mounted) setP(data as Prospect)
+        if (!mounted) return
+        if (!data) throw new Error('Prospect not found in view.')
+        setP(data as Prospect)
       } catch (e: any) {
         Alert.alert('Load failed', e.message ?? 'Unknown error')
       } finally {
-        setLoading(false)
+        if (mounted) setLoading(false)
       }
     }
     run()
@@ -78,10 +96,17 @@ export function ViewProspectModal({
               <InfoRow label="Specialty" value={p.specialty} strong />
               <InfoRow label="Area" value={p.area ?? '-'} />
               <InfoRow label="Classification" value={p.classification ?? '-'} />
+
+              {/* Frequency & visits — read from backend-computed freq_actual */}
+              <InfoRow label="Frequency (Required)" value={`${p.freq_required ?? 0}`} />
+              <InfoRow label="Visits (This Month)" value={`${visitsThisMonth}`} />
+              <InfoRow label="Visited This Month" value={visitedThisMonth ? 'Yes' : 'No'} />
               <InfoRow
-                label="Frequency"
-                value={`${p.freq_actual ?? 0}/${p.freq_required ?? 0}`}
+                label="Frequency Status"
+                value={freqMet ? 'Met ✅' : 'Not met ❌'}
+                primary={freqMet}
               />
+
               <InfoRow label="Phone" value={p.phone ?? '-'} />
               <InfoRow label="Mobile" value={p.mobile ?? '-'} />
               <InfoRow label="Address" value={p.address ?? '-'} />
@@ -135,6 +160,7 @@ export function EditProspectModal({
       if (!open || !id) return
       setLoading(true)
       try {
+        // For edit we can still use your existing RPC that returns the raw row
         const { data, error } = await supabase.rpc('get_prospect', { p_id: id })
         if (error) throw error
         const p = data as Prospect
@@ -153,7 +179,7 @@ export function EditProspectModal({
       } catch (e: any) {
         Alert.alert('Load failed', e.message ?? 'Unknown error')
       } finally {
-        setLoading(false)
+        if (mounted) setLoading(false)
       }
     }
     run()
@@ -162,46 +188,42 @@ export function EditProspectModal({
     }
   }, [open, id])
 
-const save = async () => {
-  if (!id) return
-  setSaving(true)
-  try {
-    const payload = {
-      p_id: id,
-      p_name: name?.trim() || null,
-      p_phone: phone?.trim() || null,
-      p_mobile: mobile?.trim() || null,
-      p_specialty: specialty?.trim() || null,
-      p_classification: classification?.trim() || null,
-      p_area: area?.trim() || null,
-      p_freq_required:
-        typeof freqReq === 'number' && Number.isFinite(freqReq) ? freqReq : null,
-      p_address: address?.trim() || null,
-      p_email: email?.trim() || null,
-      p_note: note?.trim() || null,
-      p_status: status?.trim() || null,
+  const save = async () => {
+    if (!id) return
+    setSaving(true)
+    try {
+      const payload = {
+        p_id: id,
+        p_name: name?.trim() || null,
+        p_phone: phone?.trim() || null,
+        p_mobile: mobile?.trim() || null,
+        p_specialty: specialty?.trim() || null,
+        p_classification: classification?.trim() || null,
+        p_area: area?.trim() || null,
+        p_freq_required:
+          typeof freqReq === 'number' && Number.isFinite(freqReq) ? freqReq : null,
+        p_address: address?.trim() || null,
+        p_email: email?.trim() || null,
+        p_note: note?.trim() || null,
+        p_status: status?.trim() || null,
+      }
+
+      const { data, error } = await supabase.rpc('update_prospect', payload)
+      if (error) {
+        // @ts-ignore
+        console.error('update_prospect error:', error, error.details, error.hint, error.code)
+        throw error
+      }
+
+      onSaved({ id: (data as any)[0].id })
+      onClose()
+      Alert.alert('Saved', 'Client updated successfully.')
+    } catch (e: any) {
+      Alert.alert('Save failed', e.message ?? 'Unknown error')
+    } finally {
+      setSaving(false)
     }
-
-    const { data, error } = await supabase.rpc('update_prospect', payload)
-
-    if (error) {
-      console.error('update_prospect error:', error)
-      // @ts-ignore: Supabase error may have extra fields
-      console.error('details:', error.details, 'hint:', error.hint, 'code:', error.code)
-      throw error
-    }
-
-    onSaved({ id: (data as any)[0].id })
-    onClose()
-    Alert.alert('Saved', 'Client updated successfully.')
-  } catch (e: any) {
-    Alert.alert('Save failed', e.message ?? 'Unknown error')
-  } finally {
-    setSaving(false)
   }
-}
-
-
 
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
@@ -265,7 +287,7 @@ function InfoRow({
       <Text style={{ color: '#6b7280', fontSize: 12 }}>{label}</Text>
       <Text
         style={{
-          color: primary ? '#2563eb' : '#111827',
+          color: primary ? '#16a34a' : '#111827',
           fontSize: strong ? 18 : 14,
           fontWeight: strong ? '800' : '600',
         }}
