@@ -10,7 +10,8 @@ import BrochureReview from './components/BrochureReview'
 import VisitsSchedule from './components/VisitsSchedule'
 import SummaryScreen from './components/SummaryScreen'
 import ObjectivesScreen from './components/ObjectivesScreen'
-import AchievementsReview from './components/AchievementsReview' // <-- NEW
+import AchievementsReview from './components/AchievementsReview'
+import EndJourneyReport from './components/EndJourneyReport' // <-- NEW
 
 export type AppUser = { id: string; username: string }
 
@@ -22,7 +23,8 @@ type Screen =
   | 'visits'
   | 'summary'
   | 'objectives'
-  | 'achievements' // <-- NEW
+  | 'achievements'
+  | 'end_report' // <-- NEW
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null)
@@ -50,7 +52,8 @@ export default function App() {
             if (key === 'opportunities') setScreen('visits')   // Planned Opportunities → Visits
             if (key === 'summary') setScreen('summary')
             if (key === 'assess_objectives') setScreen('objectives')
-            if (key === 'achievements') setScreen('achievements') // <-- route tile
+            if (key === 'achievements') setScreen('achievements')
+            if (key === 'end_journey') setScreen('end_report') // <-- map your tile key
           }}
         />
       )}
@@ -91,6 +94,12 @@ export default function App() {
       {screen === 'visits' && (
         <VisitsSchedule
           currentUser={user}
+          onBack={() => setScreen('home')}
+        />
+      )}
+
+      {screen === 'end_report' && (
+        <EndJourneyReport
           onBack={() => setScreen('home')}
         />
       )}

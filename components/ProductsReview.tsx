@@ -21,20 +21,20 @@ type Product = {
   code?: string | null
 }
 
-type SampleRequest = {
+/** Unified movement row coming from sample_actions. */
+type SampleMovement = {
   id: string
-  item_id: string
-  product_name: string
-  requested_by: string
+  item_id?: string | null
+  product_name: string       // sample_actions.item_name
+  actor: string              // sample_actions.requested_by
   unit_type: 'case' | 'box' | 'piece'
   quantity: number
-  status: 'pending' | 'approved' | 'declined'
-  requested_at: string
+  status: 'pending' | 'approved' | 'declined' | 'canceled' | null
+  kind: 'request' | 'return' // sample_actions.action
+  ts: string                 // sample_actions.requested_at
 }
 
-type Props = {
-  onBack?: () => void
-}
+type Props = { onBack?: () => void }
 
 export default function ProductsReview({ onBack }: Props) {
   const { width } = useWindowDimensions()
@@ -57,14 +57,25 @@ export default function ProductsReview({ onBack }: Props) {
     saving: boolean
   }>({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
 
-  // ----- REQUESTS LIST modal -----
+  // ----- RETURN modal state -----
+  const [returnModal, setReturnModal] = useState<{
+    open: boolean
+    product: Product | null
+    name: string
+    type: 'case' | 'box' | 'piece'
+    qty: string
+    saving: boolean
+  }>({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
+
+  // ----- MOVEMENTS LIST modal (requests + returns) -----
   const [listModal, setListModal] = useState<{
     open: boolean
     loading: boolean
-    rows: SampleRequest[]
+    rows: SampleMovement[]
     err: string | null
-    filter: 'all' | 'pending' | 'approved' | 'declined'
-  }>({ open: false, loading: false, rows: [], err: null, filter: 'all' })
+    typeFilter: 'all' | 'request' | 'return'
+    statusFilter: 'all' | 'pending' | 'approved' | 'declined' | 'canceled'
+  }>({ open: false, loading: false, rows: [], err: null, typeFilter: 'all', statusFilter: 'all' })
 
   // ---- FETCH products ----
   const loadProducts = async () => {
@@ -113,7 +124,7 @@ export default function ProductsReview({ onBack }: Props) {
       )
     : items
 
-  // ----- Request flow -----
+  /* ---------- Request flow (INSERT into sample_actions) ---------- */
   const openRequest = (p: Product) => {
     if ((p.stock ?? 0) <= 0) {
       Alert.alert('No available stock', 'This product has no stock available.')
@@ -134,56 +145,122 @@ export default function ProductsReview({ onBack }: Props) {
       Alert.alert('Invalid quantity', 'Enter a positive number.')
       return
     }
-    if (qtyNum > m.product.stock) {
+    if (qtyNum > (m.product.stock ?? 0)) {
       Alert.alert('Too many', `Only ${m.product.stock} in stock.`)
       return
     }
+
     try {
       setRequestModal((x) => ({ ...x, saving: true }))
 
-      const { data, error } = await supabase.rpc('request_sample', {
-        p_item_id: m.product.id,
-        p_requested_by: m.name.trim(),
-        p_unit_type: m.type,
-        p_quantity: qtyNum,
-      })
+      // Write to unified table
+      const { error } = await supabase.from('sample_actions').insert([
+        {
+          requested_by: m.name.trim(),
+          action: 'request',
+          quantity: qtyNum,
+          item_name: m.product.name,
+          unit_type: m.type,
+          status: 'pending', // workflow state
+          // requested_at auto now()
+        },
+      ])
 
-      if (error) {
-        console.error('request_sample error:', error)
-        // @ts-ignore
-        console.error('details:', error.details, 'hint:', error.hint, 'code:', error.code)
-        throw error
-      }
+      if (error) throw error
 
       Alert.alert('Request recorded', 'Saved as pending.')
       setRequestModal({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
+      // If you want to immediately reflect stock, add a stock-decrement trigger or call loadProducts()
+      // await loadProducts()
     } catch (e: any) {
       Alert.alert('Action failed', e?.message ?? 'Unknown error')
       setRequestModal((x) => ({ ...x, saving: false }))
     }
   }
 
-  // ----- Requests list -----
-  const openRequestsList = async () => {
-    setListModal({ open: true, loading: true, rows: [], err: null, filter: 'all' })
+  /* ---------- Return flow (INSERT into sample_actions) ---------- */
+  const openReturn = (p: Product) => {
+    setReturnModal({ open: true, product: p, name: '', type: 'box', qty: '', saving: false })
+  }
+
+  const submitReturn = async () => {
+    const m = returnModal
+    if (!m.product) return
+    const qtyNum = Number(m.qty)
+    if (!m.name.trim()) {
+      Alert.alert('Missing name', 'Enter your name.')
+      return
+    }
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      Alert.alert('Invalid quantity', 'Enter a positive number.')
+      return
+    }
+
     try {
-      const { data, error } = await supabase.rpc('get_sample_requests')
-      if (error) {
-        console.error('get_sample_requests error:', error)
-        // @ts-ignore
-        console.error('details:', error.details, 'hint:', error.hint, 'code:', error.code)
-        throw error
-      }
-      setListModal((m) => ({ ...m, loading: false, rows: (data as SampleRequest[]) ?? [] }))
+      setReturnModal((x) => ({ ...x, saving: true }))
+
+      // Returns go in the same table, action='return'
+      const { error } = await supabase.from('sample_actions').insert([
+        {
+          requested_by: m.name.trim(),
+          action: 'return',
+          quantity: qtyNum,
+          item_name: m.product.name,
+          unit_type: m.type,
+          status: 'approved', // or NULL; using approved makes it obvious it's processed
+        },
+      ])
+      if (error) throw error
+
+      Alert.alert('Return recorded', 'Thank you.')
+      setReturnModal({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
+      // If you want to immediately reflect stock, add a stock-increment trigger or call loadProducts()
+      // await loadProducts()
     } catch (e: any) {
-      setListModal({ open: true, loading: false, rows: [], err: e?.message ?? 'Failed to load', filter: 'all' })
+      Alert.alert('Action failed', e?.message ?? 'Unknown error')
+      setReturnModal((x) => ({ ...x, saving: false }))
     }
   }
 
-  const filteredRequests = useMemo(() => {
-    if (listModal.filter === 'all') return listModal.rows
-    return listModal.rows.filter((r) => r.status === listModal.filter)
-  }, [listModal.rows, listModal.filter])
+  /* ---------- Movements list (requests + returns) ---------- */
+  const openMovements = async () => {
+    setListModal({ open: true, loading: true, rows: [], err: null, typeFilter: 'all', statusFilter: 'all' })
+    try {
+      // Read directly from unified table
+      const { data, error } = await supabase
+        .from('sample_actions')
+        .select('id, requested_by, action, quantity, requested_at, item_name, unit_type, status')
+        .order('requested_at', { ascending: false })
+      if (error) throw error
+
+      const rows: SampleMovement[] = (data ?? []).map((r: any) => ({
+        id: String(r.id),
+        item_id: null,
+        product_name: String(r.item_name ?? '—'),
+        actor: String(r.requested_by ?? '—'),
+        unit_type: r.unit_type,
+        quantity: Number(r.quantity ?? 0),
+        status: r.status ?? null,
+        kind: (r.action ?? 'request') as 'request' | 'return',
+        ts: r.requested_at ?? new Date().toISOString(),
+      }))
+
+      setListModal((m) => ({ ...m, loading: false, rows }))
+    } catch (e: any) {
+      setListModal({ open: true, loading: false, rows: [], err: e?.message ?? 'Failed to load', typeFilter: 'all', statusFilter: 'all' })
+    }
+  }
+
+  const filteredMovements = useMemo(() => {
+    let r = listModal.rows
+    if (listModal.typeFilter !== 'all') {
+      r = r.filter(x => x.kind === listModal.typeFilter)
+    }
+    if (listModal.statusFilter !== 'all') {
+      r = r.filter(x => (x.kind === 'request' ? (x.status ?? 'pending') === listModal.statusFilter : true))
+    }
+    return r
+  }, [listModal.rows, listModal.typeFilter, listModal.statusFilter])
 
   return (
     <View style={styles.screen}>
@@ -194,9 +271,9 @@ export default function ProductsReview({ onBack }: Props) {
         </Pressable>
         <Text style={styles.title}>Products Review</Text>
 
-        {/* Requested Samples button */}
-        <Pressable onPress={openRequestsList} style={styles.topBtn}>
-          <Text style={styles.topBtnText}>Requested Samples</Text>
+        {/* Movements button */}
+        <Pressable onPress={openMovements} style={styles.topBtn}>
+          <Text style={styles.topBtnText}>Sample Movements</Text>
         </Pressable>
       </View>
 
@@ -232,7 +309,7 @@ export default function ProductsReview({ onBack }: Props) {
           items={filtered}
           cardW={cardW}
           onRequest={openRequest}
-          onReturn={(p) => Alert.alert('Return sample', `Implement return flow later for ${p.name}.`)}
+          onReturn={openReturn}
         />
       )}
 
@@ -305,20 +382,109 @@ export default function ProductsReview({ onBack }: Props) {
         </View>
       </Modal>
 
-      {/* REQUESTS LIST MODAL (polished) */}
+      {/* RETURN MODAL */}
+      <Modal visible={returnModal.open} transparent animationType="fade" onRequestClose={() => setReturnModal((x) => ({ ...x, open: false }))}>
+        <View style={styles.overlay}>
+          <View style={[styles.sheet, { width: 520, maxWidth: '95%' }]}>
+            <Text style={styles.sheetTitle}>Return Sample</Text>
+            {returnModal.product ? (
+              <>
+                <Text style={styles.sheetLabel}>{returnModal.product.name}</Text>
+
+                <Text style={styles.label}>Your Name</Text>
+                <TextInput
+                  value={returnModal.name}
+                  onChangeText={(v) => setReturnModal((x) => ({ ...x, name: v }))}
+                  placeholder="e.g., Hussein"
+                  placeholderTextColor="#9aa0a6"
+                  style={styles.input}
+                />
+
+                <Text style={[styles.label, { marginTop: 10 }]}>Type</Text>
+                <View style={styles.segmentRow}>
+                  {(['case', 'box', 'piece'] as const).map((opt) => {
+                    const active = returnModal.type === opt
+                    return (
+                      <Pressable
+                        key={opt}
+                        onPress={() => setReturnModal((x) => ({ ...x, type: opt }))}
+                        style={[styles.segment, active && styles.segmentActive]}
+                      >
+                        <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                          {opt.toUpperCase()}
+                        </Text>
+                      </Pressable>
+                    )
+                  })}
+                </View>
+
+                <Text style={[styles.label, { marginTop: 10 }]}>Quantity</Text>
+                <TextInput
+                  value={returnModal.qty}
+                  onChangeText={(v) =>
+                    setReturnModal((x) => ({ ...x, qty: v.replace(/[^\d]/g, '') }))
+                  }
+                  keyboardType="numeric"
+                  placeholder="e.g., 5"
+                  placeholderTextColor="#9aa0a6"
+                  style={styles.input}
+                />
+
+                <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                  <Pressable
+                    onPress={() => setReturnModal({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })}
+                    style={styles.btn}
+                  >
+                    <Text style={styles.btnText}>Cancel</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={submitReturn}
+                    disabled={returnModal.saving}
+                    style={[styles.btn, styles.btnPrimary]}
+                  >
+                    {returnModal.saving ? <ActivityIndicator /> : <Text style={styles.btnPrimaryText}>Submit</Text>}
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      {/* MOVEMENTS LIST MODAL (requests + returns) */}
       <Modal visible={listModal.open} transparent animationType="fade" onRequestClose={() => setListModal((m) => ({ ...m, open: false }))}>
         <View style={styles.overlay}>
-          <View style={[styles.sheet, { width: 760, maxWidth: '96%' }]}>
+          <View style={[styles.sheet, { width: 820, maxWidth: '96%' }]}>
             {/* Header row */}
             <View style={styles.listHeader}>
-              <Text style={styles.sheetTitle}>Requested Samples</Text>
+              <Text style={styles.sheetTitle}>Sample Movements</Text>
+
+              {/* Type filter */}
               <View style={styles.filterRow}>
-                {(['all', 'pending', 'approved', 'declined'] as const).map((f) => {
-                  const active = listModal.filter === f
+                {(['all','request','return'] as const).map((f) => {
+                  const active = listModal.typeFilter === f
                   return (
                     <Pressable
                       key={f}
-                      onPress={() => setListModal((m) => ({ ...m, filter: f }))}
+                      onPress={() => setListModal((m) => ({ ...m, typeFilter: f }))}
+                      style={[styles.filterChip, active && styles.filterChipActive]}
+                    >
+                      <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
+                        {f.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+
+              {/* Status filter (requests only) */}
+              <View style={styles.filterRow}>
+                {(['all', 'pending', 'approved', 'declined', 'canceled'] as const).map((f) => {
+                  const active = listModal.statusFilter === f
+                  return (
+                    <Pressable
+                      key={f}
+                      onPress={() => setListModal((m) => ({ ...m, statusFilter: f }))}
                       style={[styles.filterChip, active && styles.filterChipActive]}
                     >
                       <Text style={[styles.filterChipText, active && styles.filterChipTextActive]}>
@@ -335,24 +501,27 @@ export default function ProductsReview({ onBack }: Props) {
             ) : listModal.err ? (
               <>
                 <Text style={{ color: '#b91c1c', marginBottom: 8 }}>{listModal.err}</Text>
-                <Pressable onPress={openRequestsList} style={[styles.btn, styles.btnPrimary, { alignSelf: 'flex-start' }]}>
+                <Pressable onPress={openMovements} style={[styles.btn, styles.btnPrimary, { alignSelf: 'flex-start' }]}>
                   <Text style={styles.btnPrimaryText}>Retry</Text>
                 </Pressable>
               </>
-            ) : filteredRequests.length === 0 ? (
-              <Text style={{ color: '#6b7280' }}>No requests.</Text>
+            ) : filteredMovements.length === 0 ? (
+              <Text style={{ color: '#6b7280' }}>No movements.</Text>
             ) : (
               <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ paddingBottom: 6 }}>
-                {filteredRequests.map((r) => (
-                  <View key={r.id} style={styles.reqCard}>
+                {filteredMovements.map((r) => (
+                  <View key={`${r.kind}-${r.id}`} style={styles.reqCard}>
+                    <KindChip kind={r.kind} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.reqTitle} numberOfLines={1}>{r.product_name}</Text>
                       <Text style={styles.reqSub} numberOfLines={1}>
-                        By <Text style={{ fontWeight: '700' }}>{r.requested_by}</Text> • {r.quantity} {r.unit_type}
+                        {r.kind === 'request' ? 'By' : 'From'} <Text style={{ fontWeight: '700' }}>{r.actor}</Text> • {r.quantity} {r.unit_type}
                       </Text>
-                      <Text style={styles.reqTime}>{new Date(r.requested_at).toLocaleString()}</Text>
+                      <Text style={styles.reqTime}>{new Date(r.ts).toLocaleString()}</Text>
                     </View>
-                    <StatusChip status={r.status} />
+                    {r.kind === 'request'
+                      ? <RequestStatusChip status={(r.status ?? 'pending') as any} />
+                      : <View style={{ width: 74, alignItems: 'flex-end' }}><Text style={{ color: '#475569', fontSize: 12, fontWeight: '800' }}>—</Text></View>}
                   </View>
                 ))}
               </ScrollView>
@@ -454,16 +623,28 @@ function Grid({
   )
 }
 
-function StatusChip({ status }: { status: SampleRequest['status'] }) {
+function RequestStatusChip({ status }: { status: 'pending' | 'approved' | 'declined' | 'canceled' }) {
   const map = {
-    pending: { bg: '#fef3c7', fg: '#92400e', text: 'PENDING' },
+    pending:  { bg: '#fef3c7', fg: '#92400e', text: 'PENDING' },
     approved: { bg: '#dcfce7', fg: '#065f46', text: 'APPROVED' },
     declined: { bg: '#fee2e2', fg: '#991b1b', text: 'DECLINED' },
+    canceled: { bg: '#e2e8f0', fg: '#334155', text: 'CANCELED' },
   } as const
   const s = map[status]
   return (
-    <View style={{ backgroundColor: s.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999 }}>
+    <View style={{ backgroundColor: s.bg, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, minWidth: 84, alignItems: 'center' }}>
       <Text style={{ color: s.fg, fontWeight: '800', fontSize: 12 }}>{s.text}</Text>
+    </View>
+  )
+}
+
+function KindChip({ kind }: { kind: 'request' | 'return' }) {
+  const s = kind === 'request'
+    ? { bg: '#e0e7ff', fg: '#1d4ed8', text: 'REQUEST' }
+    : { bg: '#ecfeff', fg: '#0e7490', text: 'RETURN' }
+  return (
+    <View style={{ backgroundColor: s.bg, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, marginRight: 10 }}>
+      <Text style={{ color: s.fg, fontWeight: '900', fontSize: 11 }}>{s.text}</Text>
     </View>
   )
 }
@@ -480,7 +661,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#edf0f5',
     // @ts-ignore rn-web
-    boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.06)',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -602,7 +783,7 @@ const styles = StyleSheet.create({
   sheetTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
   sheetLabel: { color: '#6b7280', marginBottom: 8 },
 
-  /* ---- Requests list header / filters ---- */
+  /* ---- Header / filters ---- */
   listHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -663,7 +844,7 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
   btnPrimaryText: { color: 'white', fontWeight: '800' },
 
-  /* ---- Request list items ---- */
+  /* ---- Movement list items ---- */
   reqCard: {
     padding: 12,
     borderRadius: 14,

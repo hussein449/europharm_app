@@ -1,7 +1,7 @@
 // components/VisitsSchedule.tsx
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import {
-  View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput, Platform,
+  View, Text, Pressable, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput, Platform, RefreshControl,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 import { startTracking, stopTracking, setCurrentVisitId } from '../lib/tracking'
@@ -15,17 +15,22 @@ type VisitRow = {
   area?: string | null
   notes?: string | null
   visited_by?: string | null
-  note_type?: 'SALES ORDER' | 'RFR' | 'COLLECTION' | null
+  note_type?: 'SALES ORDER' | 'RFR' | 'COLLECTION' | string | null
 }
 
 type UserLite = { id: string; username: string }
 type Props = { onBack?: () => void; currentUser?: UserLite }
+
+// --- new types for samples UI ---
+type SampleStock = { sample_type: string; qty: number }
+type SampleLine = { type: string; qty: string } // qty kept as string for input binding
 
 export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth()) // 0-11
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [rows, setRows] = useState<VisitRow[]>([])
   const [selectedDay, setSelectedDay] = useState(toIsoDate(today))
@@ -44,6 +49,16 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const [newArea, setNewArea] = useState('')
   const [newDate, setNewDate] = useState(selectedDay)
 
+  // --- samples UI state ---
+  const [loadingSamples, setLoadingSamples] = useState(false)
+  const [stock, setStock] = useState<SampleStock[]>([])
+  const [sampleLines, setSampleLines] = useState<SampleLine[]>([{ type: '', qty: '' }])
+
+  // --- weekly send status popup ---
+  const [sendStatus, setSendStatus] = useState<'idle'|'sending'|'success'|'error'>('idle')
+  const [sendMessage, setSendMessage] = useState<string>('')
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const range = monthRange(year, month)
 
   /* ---------------- load / refresh ---------------- */
@@ -59,17 +74,21 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
 
       if (error) throw error
 
-      const normalized: VisitRow[] = (data ?? []).map((r: any) => ({
-        id: String(r.id),
-        visit_date: String(r.visit_date ?? '').slice(0, 10),
-        status: (r.status ?? 'planned'),
-        client_name: String(r.client_name ?? r.client ?? r.name ?? '—'),
-        specialty: r.specialty ?? '—',
-        area: r.area ?? '—',
-        notes: r.notes ?? null,
-        visited_by: r.visited_by ?? null,
-        note_type: r.note_type ?? null,
-      }))
+      const normalized: VisitRow[] = (data ?? []).map((r: any) => ([
+        'id','visit_date','status','client_name','specialty','area','notes','visited_by','note_type'
+      ].reduce((acc: any, k: string) => { acc[k] = r[k]; return acc }, {}))) as VisitRow[]
+
+      for (const r of normalized) {
+        r.id = String(r.id)
+        r.visit_date = String(r.visit_date ?? '').slice(0, 10)
+        r.status = (r.status ?? 'planned')
+        r.client_name = String(r.client_name ?? '—')
+        r.specialty = r.specialty ?? '—'
+        r.area = r.area ?? '—'
+        r.notes = r.notes ?? null
+        r.visited_by = r.visited_by ?? null
+        r.note_type = (r.note_type ?? null) as any
+      }
 
       setRows(normalized)
 
@@ -84,6 +103,12 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     } finally {
       setLoading(false)
     }
+  }
+
+  const onRefresh = async () => {
+    setRefreshing(true)
+    await load()
+    setRefreshing(false)
   }
 
   useEffect(() => { load() }, [year, month])
@@ -127,17 +152,15 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     }
   }
 
-  // Toggle ONLY the tapped visit between planned <-> en_route. Never touch other visits.
   const selectVisit = async (visit: VisitRow) => {
     if (!journeyMode) return
-    if (showFinishModal) return // don't retoggle while modal is up
+    if (showFinishModal) return
     if (visit.status === 'done' || visit.status === 'skipped') return
 
     const username = currentUser?.username ?? null
     const nextStatus = visit.status === 'en_route' ? 'planned' : 'en_route'
 
     try {
-      // Minimal update (no returning) to avoid 406/PGRST116
       const { error } = await supabase
         .from('visits')
         .update({
@@ -168,28 +191,87 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     }
   }
 
-  const endJourneyOpen = () => {
+  const endJourneyOpen = async () => {
     if (!activeVisitId) {
       Alert.alert('Select a visit', 'Pick a visit (checkbox) to end.')
       return
     }
     setSummary('')
     setNoteType('SALES ORDER')
+    setSampleLines([{ type: '', qty: '' }])
     setShowFinishModal(true)
+
+    // Load sample stock for this user
+    const username = currentUser?.username ?? null
+    if (!username) return
+    setLoadingSamples(true)
+    try {
+      const { data, error } = await supabase
+        .from('sample_distribution')
+        .select('sample_type, qty')
+        .eq('username', username)
+        .order('sample_type', { ascending: true })
+      if (error) throw error
+      setStock((data ?? []) as SampleStock[])
+    } catch (e: any) {
+      console.error('load sample stock error:', e)
+      Alert.alert('Samples', e?.message ?? 'Failed to load samples.')
+    } finally {
+      setLoadingSamples(false)
+    }
   }
 
-  // *** FIXED: no .select() on update; handle 406/PGRST116; clear state before reload ***
+  // --- helpers to edit sample lines
+  const setLineType = (idx: number, v: string) => {
+    setSampleLines(prev => prev.map((l, i) => i === idx ? { ...l, type: v } : l))
+  }
+  const setLineQty = (idx: number, v: string) => {
+    const clean = v.replace(/[^\d]/g, '')
+    setSampleLines(prev => prev.map((l, i) => i === idx ? { ...l, qty: clean } : l))
+  }
+  const addLine = () => setSampleLines(prev => [...prev, { type: '', qty: '' }])
+  const removeLine = (idx: number) => setSampleLines(prev => prev.filter((_, i) => i !== idx))
+
+  // *** finish journey with sample validation & stock decrement ***
   const endJourneyConfirm = async () => {
     const vid = activeVisitId
     if (!vid) return
+    const username = currentUser?.username ?? null
+
+    const reqMap = new Map<string, number>()
+    for (const l of sampleLines) {
+      const t = (l.type || '').trim()
+      const q = l.qty === '' ? 0 : Number(l.qty)
+      if (!t && q === 0) continue
+      if (!t) return Alert.alert('Samples', 'Choose a sample type.')
+      if (!Number.isInteger(q) || q < 0) return Alert.alert('Samples', 'Quantity must be a whole number ≥ 0.')
+      if (q === 0) continue
+      reqMap.set(t, (reqMap.get(t) ?? 0) + q)
+    }
+
+    for (const [t, q] of reqMap.entries()) {
+      const found = stock.find(s => s.sample_type === t)
+      const avail = found?.qty ?? 0
+      if (q > avail) {
+        return Alert.alert('Samples', `Not enough "${t}". Available: ${avail}, requested: ${q}.`)
+      }
+    }
+
+    const samplesStr = Array.from(reqMap.entries())
+      .map(([t, q]) => `${t} x${q}`)
+      .join('; ')
+
     try {
-      const username = currentUser?.username ?? null
+      const newNotes = [
+        (summary || '').trim(),
+        samplesStr ? `Samples: ${samplesStr}` : null
+      ].filter(Boolean).join('\n')
 
       const { error: updErr, status } = await supabase
         .from('visits')
         .update({
           status: 'done',
-          notes: summary,
+          notes: newNotes,
           visited_by: username,
           note_type: noteType,
         })
@@ -199,30 +281,79 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
         throw updErr
       }
 
-      // Stop tracking + clear local state BEFORE reload
+      for (const [t, q] of reqMap.entries()) {
+        const { error: decErr } = await supabase
+          .from('sample_distribution')
+          .update({ qty: (stock.find(s => s.sample_type === t)?.qty ?? 0) - q })
+          .eq('username', username ?? '')
+          .eq('sample_type', t)
+        if (decErr) throw decErr
+      }
+
       await stopTracking()
       await setCurrentVisitId(null)
       setShowFinishModal(false)
       setJourneyMode(false)
       setActiveVisitId(null)
       setSummary('')
+      setSampleLines([{ type: '', qty: '' }])
 
-      // Reload to reflect DB truth (prevents any re-toggle)
       await load()
 
-      if (Platform.OS === 'web') console.log('Visit finished OK', { vid, noteType })
+      if (Platform.OS === 'web') console.log('Visit finished OK', { vid, noteType, samplesStr })
     } catch (e: any) {
       console.error('finish visit update error', e)
       Alert.alert('Error', e?.message ?? 'Failed to finish visit.')
     }
   }
 
+  /* ---------------- weekly schedule send ---------------- */
+  const weekRange = useMemo(() => weekRangeFromISO(selectedDay), [selectedDay])
+
+  const sendWeek = async () => {
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+    setSendStatus('sending')
+    setSendMessage('Sending this week’s schedule…')
+
+    try {
+      const username = currentUser?.username || '(unknown)'
+      const { start, end } = weekRange
+      const weekly = rows.filter(r => r.visit_date >= start && r.visit_date <= end)
+
+      const payload = [{
+        username,
+        week_start: start,
+        week_end: end,
+        visits: weekly.map(v => ({
+          id: v.id,
+          date: v.visit_date,
+          client: v.client_name,
+          status: v.status,
+          type: v.note_type ?? null,
+          notes: v.notes ?? null,
+        })),
+      }]
+
+      const { error } = await supabase
+        .from('weekly_schedules')
+        .upsert(payload, { onConflict: 'username,week_start' })
+
+      if (error) throw error
+
+      setSendStatus('success')
+      setSendMessage('Schedule sent ✓')
+      hideTimer.current = setTimeout(() => {
+        setSendStatus('idle'); setSendMessage('')
+      }, 1400)
+    } catch (e: any) {
+      setSendStatus('error')
+      setSendMessage(e?.message ?? 'Failed to send schedule.')
+    }
+  }
+
   /* ---------------- add visit ---------------- */
   const openAdd = () => {
-    setNewName('')
-    setNewSpec('')
-    setNewArea('')
-    setNewDate(selectedDay)
+    setNewName(''); setNewSpec(''); setNewArea(''); setNewDate(selectedDay)
     setShowAddModal(true)
   }
 
@@ -234,6 +365,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       return
     }
     try {
+      const username = currentUser?.username ?? null
       const { error } = await supabase
         .from('visits')
         .insert([{
@@ -242,7 +374,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
           area: newArea || null,
           visit_date: date,
           status: 'planned',
-          visited_by: null,
+          visited_by: username,
           note_type: null,
         }])
 
@@ -284,14 +416,34 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
         endJourneyOpen={endJourneyOpen}
         selectVisit={selectVisit}
         showFinishModal={showFinishModal}
+        onSendWeek={sendWeek}
+        sending={sendStatus === 'sending'}
+        weekStart={weekRange.start}
+        weekEnd={weekRange.end}
       />
+
+      {/* Status popup */}
+      {sendStatus !== 'idle' && (
+        <View style={styles.statusOverlay} pointerEvents="none">
+          <View style={[
+            styles.statusCard,
+            sendStatus === 'sending' ? styles.statusNeutral :
+            sendStatus === 'success' ? styles.statusGood : styles.statusBad
+          ]}>
+            {sendStatus === 'sending' ? <ActivityIndicator /> : null}
+            <Text style={styles.statusText}>
+              {sendMessage}
+            </Text>
+          </View>
+        </View>
+      )}
 
       {/* Finish modal */}
       {showFinishModal && (
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>End Journey</Text>
-            <Text style={styles.modalSub}>Add a summary and select a type.</Text>
+            <Text style={styles.modalSub}>Add a summary, select a type, and record any samples given.</Text>
 
             <Text style={styles.inputLabel}>Note type*</Text>
             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
@@ -315,6 +467,62 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
               multiline
               style={styles.modalInput}
             />
+
+            {/* Samples block */}
+            <Text style={[styles.inputLabel, { marginTop: 8 }]}>
+              Samples given {loadingSamples ? '(loading...)' : ''}
+            </Text>
+
+            {stock.length === 0 && !loadingSamples ? (
+              <Text style={{ color: '#6b7280', marginBottom: 6 }}>No samples available.</Text>
+            ) : (
+              <View style={{ gap: 8 }}>
+                {sampleLines.map((line, idx) => (
+                  <View key={idx} style={{ flexDirection: 'row', gap: 8 }}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', gap: 6 }}>
+                        {stock.map(s => {
+                          const on = line.type === s.sample_type
+                          return (
+                            <Pressable
+                              key={s.sample_type}
+                              onPress={() => setLineType(idx, s.sample_type)}
+                              style={[styles.pill, on ? styles.pillOn : styles.pillOff]}
+                            >
+                              <Text style={on ? styles.pillTxtOn : styles.pillTxtOff}>
+                                {s.sample_type} ({s.qty})
+                              </Text>
+                            </Pressable>
+                          )
+                        })}
+                      </View>
+                    </ScrollView>
+
+                    <TextInput
+                      value={line.qty}
+                      onChangeText={(v) => setLineQty(idx, v)}
+                      keyboardType="numeric"
+                      placeholder="Qty"
+                      placeholderTextColor="#9aa0a6"
+                      style={[styles.textInput, { width: 80 }]}
+                    />
+
+                    {sampleLines.length > 1 && (
+                      <Pressable onPress={() => removeLine(idx)} style={[styles.btn, styles.btnGhost, { width: 44 }]}>
+                        <Text style={styles.btnGhostText}>–</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                ))}
+
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Pressable onPress={addLine} style={[styles.btn, styles.btnGhost, { flex: 1 }]}>
+                    <Text style={styles.btnGhostText}>+ Add another sample</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
+
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <Pressable onPress={() => setShowFinishModal(false)} style={[styles.btn, styles.btnGhost, { flex: 1 }]}>
                 <Text style={styles.btnGhostText}>Cancel</Text>
@@ -456,38 +664,47 @@ function Calendar({
 }
 
 function DayList({
-  selectedDay, dayVisits, journeyMode, activeVisitId, startJourney, openAdd, endJourneyOpen, selectVisit, showFinishModal
+  selectedDay, dayVisits, journeyMode, activeVisitId, startJourney, openAdd, endJourneyOpen, selectVisit, showFinishModal,
+  onSendWeek, sending, weekStart, weekEnd
 }: any) {
   return (
     <View style={styles.listWrap}>
       <View style={styles.listHead}>
         <Text style={styles.listTitle}>Visits on {selectedDay}</Text>
 
-        {journeyMode ? (
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable onPress={endJourneyOpen} disabled={!activeVisitId} style={[styles.endBtn, !activeVisitId && { opacity: 0.5 }]}>
-              <Text style={styles.endBtnTxt}>End Journey</Text>
-            </Pressable>
-            <Pressable onPress={openAdd} style={styles.addBtn}>
-              <Text style={styles.addBtnTxt}>+ Add</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <Pressable onPress={startJourney} disabled={dayVisits.length === 0} style={[styles.startBtn, dayVisits.length === 0 && { opacity: 0.5 }]}>
-              <Text style={styles.startBtnTxt}>Start Journey</Text>
-            </Pressable>
-            <Pressable onPress={openAdd} style={styles.addBtn}>
-              <Text style={styles.addBtnTxt}>+ Add</Text>
-            </Pressable>
-          </View>
-        )}
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Pressable onPress={onSendWeek} disabled={sending} style={[styles.weekBtn, sending && { opacity: 0.6 }]}>
+            {sending ? <ActivityIndicator /> : <Text style={styles.weekBtnTxt}>Send Week {weekStart} → {weekEnd}</Text>}
+          </Pressable>
+
+          {journeyMode ? (
+            <>
+              <Pressable onPress={endJourneyOpen} disabled={!activeVisitId} style={[styles.endBtn, !activeVisitId && { opacity: 0.5 }]}>
+                <Text style={styles.endBtnTxt}>End Journey</Text>
+              </Pressable>
+              <Pressable onPress={openAdd} style={styles.addBtn}>
+                <Text style={styles.addBtnTxt}>+ Add</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <Pressable onPress={startJourney} disabled={dayVisits.length === 0} style={[styles.startBtn, dayVisits.length === 0 && { opacity: 0.5 }]}>
+                <Text style={styles.startBtnTxt}>Start Journey</Text>
+              </Pressable>
+              <Pressable onPress={openAdd} style={styles.addBtn}>
+                <Text style={styles.addBtnTxt}>+ Add</Text>
+              </Pressable>
+            </>
+          )}
+        </View>
       </View>
 
       {dayVisits.length === 0 ? (
         <Text style={{ color: '#6b7280', paddingHorizontal: 16 }}>No visits planned.</Text>
       ) : (
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
+          refreshControl={<RefreshControl refreshing={false} onRefresh={()=>{}} />}
+        >
           {dayVisits.map((v: VisitRow) => {
             const isActive = journeyMode && activeVisitId === v.id
             const canToggle = journeyMode && !showFinishModal && v.status !== 'done' && v.status !== 'skipped'
@@ -555,6 +772,16 @@ function buildCalendarGrid(year: number, month0: number) {
   const weeks: typeof days[] = []
   for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7))
   return weeks
+}
+
+function weekRangeFromISO(iso: string) {
+  // Monday-start week
+  const [y,m,d] = iso.split('-').map(Number)
+  const base = new Date(y, m-1, d)
+  let day = base.getDay(); if (day === 0) day = 7 // Sun=7
+  const monday = new Date(base); monday.setDate(base.getDate() - (day - 1))
+  const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
+  return { start: toIsoDate(monday), end: toIsoDate(sunday) }
 }
 
 /* ---------------- presentational ---------------- */
@@ -636,6 +863,13 @@ const styles = StyleSheet.create({
   },
   addBtnTxt: { color: '#fff', fontWeight: '800' },
 
+  weekBtn: {
+    height: 40, paddingHorizontal: 14, borderRadius: 999,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#111827',
+  },
+  weekBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 12 },
+
   card: {
     marginTop: 10, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#eef0f3',
     backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -693,4 +927,22 @@ const styles = StyleSheet.create({
   pillOff: { backgroundColor: '#fff', borderColor: '#e5e7eb' },
   pillTxtOn: { color: '#fff', fontWeight: '800' },
   pillTxtOff: { color: '#111827', fontWeight: '800' },
+
+  /* status popup */
+  statusOverlay: {
+    position: 'absolute', left: 0, right: 0, bottom: 24,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  statusCard: {
+    minWidth: 220, maxWidth: 360,
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center', gap: 8,
+    // @ts-ignore rn-web
+    boxShadow: '0 12px 30px rgba(0,0,0,0.18)',
+  },
+  statusNeutral: { backgroundColor: '#111827' },
+  statusGood: { backgroundColor: '#10b981' },
+  statusBad: { backgroundColor: '#ef4444' },
+  statusText: { color: '#fff', fontWeight: '900', textAlign: 'center' },
 })
