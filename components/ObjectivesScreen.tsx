@@ -22,6 +22,9 @@ type Props = {
   currentUser?: { id: string; username: string }
 }
 
+// flip this if you also want to show unassigned objectives
+const SHOW_UNASSIGNED = true
+
 export default function ObjectivesScreen({ onBack, currentUser }: Props) {
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -38,14 +41,28 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
   const [newObjective, setNewObjective] = useState('')
   const [newDue, setNewDue] = useState('') // YYYY-MM-DD optional
 
-  const username = currentUser?.username ?? 'hussein'
+  const username = (currentUser?.username ?? '').trim() || null
 
   const load = async () => {
     setLoading(true); setErrorMsg(null)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('objectives')
         .select('id, client_name, objective, status, assigned_date, due_date, updated_by')
+
+      // 🔒 scope to this user (optionally include unassigned)
+      if (username) {
+        if (SHOW_UNASSIGNED) {
+          query = query.or(`updated_by.eq.${username},updated_by.is.null`)
+        } else {
+          query = query.eq('updated_by', username)
+        }
+      } else {
+        // no username—show only unassigned
+        query = query.is('updated_by', null)
+      }
+
+      const { data, error } = await query
         .order('status', { ascending: true })
         .order('client_name', { ascending: true })
 
@@ -68,7 +85,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
     }
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [username])
 
   const filtered = useMemo(() => {
     const t = q.toLowerCase()
@@ -85,10 +102,10 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
   // Only move forward (no revert to pending)
   const setStatus = async (id: string, status: Extract<ObjStatus, 'completed' | 'canceled'>) => {
     try {
-      setRows(prev => prev.map(r => r.id === id ? { ...r, status, updated_by: username } : r))
+      setRows(prev => prev.map(r => r.id === id ? { ...r, status, updated_by: username ?? r.updated_by } : r))
       const { error } = await supabase
         .from('objectives')
-        .update({ status, updated_by: username })
+        .update({ status, updated_by: username }) // keep ownership with this user
         .eq('id', id)
       if (error) throw error
     } catch (e: any) {
@@ -126,7 +143,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
           objective: obj,
           status: 'pending',
           due_date: due || null,
-          updated_by: username,
+          updated_by: username, // tag with current user so it shows up for them
         })
         .select('id, client_name, objective, status, assigned_date, due_date, updated_by')
         .single()

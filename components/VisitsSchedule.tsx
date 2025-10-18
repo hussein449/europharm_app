@@ -25,7 +25,12 @@ type Props = { onBack?: () => void; currentUser?: UserLite }
 type SampleStock = { sample_type: string; qty: number }
 type SampleLine = { type: string; qty: string } // qty kept as string for input binding
 
+// flip this if you want the user to also see unassigned visits
+const SHOW_UNASSIGNED = true
+
 export default function VisitsSchedule({ onBack, currentUser }: Props) {
+  const username = (currentUser?.username ?? '').trim() || null
+
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth()) // 0-11
@@ -65,13 +70,27 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const load = async () => {
     setLoading(true); setErrorMsg(null)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('visits')
         .select('id, visit_date, status, client_name, specialty, area, notes, visited_by, note_type')
         .gte('visit_date', range.start)
         .lte('visit_date', range.end)
-        .order('visit_date', { ascending: true })
 
+      // 🔒 scope by user
+      if (username) {
+        if (SHOW_UNASSIGNED) {
+          // include unassigned + mine
+          query = query.or(`visited_by.is.null,visited_by.eq.${username}`)
+        } else {
+          // strictly mine
+          query = query.eq('visited_by', username)
+        }
+      } else {
+        // no username? show only unassigned so Ali won't see Hussein’s stuff
+        query = query.is('visited_by', null)
+      }
+
+      const { data, error } = await query.order('visit_date', { ascending: true })
       if (error) throw error
 
       const normalized: VisitRow[] = (data ?? []).map((r: any) => ([
@@ -111,7 +130,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setRefreshing(false)
   }
 
-  useEffect(() => { load() }, [year, month])
+  useEffect(() => { load() }, [year, month, username])
   useEffect(() => { setNewDate(selectedDay) }, [selectedDay])
 
   const byDate = useMemo(() => {
@@ -143,7 +162,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const startJourney = async () => {
     if (dayVisits.length === 0) return
     try {
-      await startTracking(currentUser?.username ?? null)
+      await startTracking(username ?? null)
       setJourneyMode(true)
       setActiveVisitId(null)
       await setCurrentVisitId(null)
@@ -157,7 +176,6 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     if (showFinishModal) return
     if (visit.status === 'done' || visit.status === 'skipped') return
 
-    const username = currentUser?.username ?? null
     const nextStatus = visit.status === 'en_route' ? 'planned' : 'en_route'
 
     try {
@@ -165,7 +183,9 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
         .from('visits')
         .update({
           status: nextStatus,
-          visited_by: nextStatus === 'en_route' ? username : visit.visited_by ?? username,
+          visited_by: nextStatus === 'en_route'
+            ? username
+            : (visit.visited_by ?? username), // keep assignment
         })
         .eq('id', visit.id)
       if (error) throw error
@@ -201,8 +221,6 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setSampleLines([{ type: '', qty: '' }])
     setShowFinishModal(true)
 
-    // Load sample stock for this user
-    const username = currentUser?.username ?? null
     if (!username) return
     setLoadingSamples(true)
     try {
@@ -236,7 +254,6 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const endJourneyConfirm = async () => {
     const vid = activeVisitId
     if (!vid) return
-    const username = currentUser?.username ?? null
 
     const reqMap = new Map<string, number>()
     for (const l of sampleLines) {
@@ -316,12 +333,12 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setSendMessage('Sending this week’s schedule…')
 
     try {
-      const username = currentUser?.username || '(unknown)'
+      const uname = username || '(unknown)'
       const { start, end } = weekRange
       const weekly = rows.filter(r => r.visit_date >= start && r.visit_date <= end)
 
       const payload = [{
-        username,
+        username: uname,
         week_start: start,
         week_end: end,
         visits: weekly.map(v => ({
@@ -365,7 +382,6 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       return
     }
     try {
-      const username = currentUser?.username ?? null
       const { error } = await supabase
         .from('visits')
         .insert([{
@@ -374,7 +390,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
           area: newArea || null,
           visit_date: date,
           status: 'planned',
-          visited_by: username,
+          visited_by: username,   // assign to current user
           note_type: null,
         }])
 
@@ -808,11 +824,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#edf0f5',
     flexDirection: 'row', alignItems: 'center', gap: 8,
     // @ts-ignore rn-web
-    boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
+    boxShadow: '0 6px 18px rgba(0,0,0,0.06)',
   },
   backBtn: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f4f6' },
   backIcon: { fontSize: 26, lineHeight: 26, color: '#111827' },
-  title: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: '#0f172a' },
+  title: { fontSize: 18, textAlign: 'center', fontWeight: '800', color: '#0f172a', flex: 1 },
 
   calendarWrap: { padding: 16 },
   calHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },

@@ -1,15 +1,8 @@
 // components/BrochureReview.tsx
 import { useEffect, useMemo, useState } from 'react'
 import {
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  StyleSheet,
-  ScrollView,
-  useWindowDimensions,
-  ActivityIndicator,
-  Platform,
+  View, Text, TextInput, Pressable, StyleSheet, ScrollView,
+  useWindowDimensions, ActivityIndicator, Platform,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 
@@ -22,11 +15,17 @@ type Brochure = {
   download_url?: string | null
   file_type?: string | null
   created?: string | null
+  last_opened_at_arr?: string[] | null
+  last_opened_by_arr?: string[] | null
 }
 
-type Props = { onBack?: () => void }
+type Props = {
+  onBack?: () => void
+  /** REQUIRED: pass rep’s display name from App (e.g., friendlyName) */
+  currentRepName: string
+}
 
-export default function BrochureReview({ onBack }: Props) {
+export default function BrochureReview({ onBack, currentRepName }: Props) {
   const { width } = useWindowDimensions()
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -34,7 +33,6 @@ export default function BrochureReview({ onBack }: Props) {
   const [q, setQ] = useState('')
   const [category, setCategory] = useState<'all' | string>('all')
 
-  // responsive grid sizing
   const columns = width >= 1280 ? 4 : width >= 1024 ? 3 : width >= 680 ? 2 : 1
   const gap = 14
   const cardW = Math.floor((width - 32 - gap * (columns - 1)) / columns)
@@ -43,33 +41,31 @@ export default function BrochureReview({ onBack }: Props) {
     setLoading(true)
     setErrorMsg(null)
     try {
-      // Prefer RPC if you added it. Fallback to direct table select.
-      const rpc = await supabase.rpc('get_brochures')
-      let data: any[] | null = null
+      const sel = await supabase
+        .from('brochure')
+        .select(`
+          id,title,description,category,file_size,download_url,file_type,created,
+          last_opened_at_arr,last_opened_by_arr
+        `)
+        .order('created', { ascending: false })
 
-      if (!rpc.error && Array.isArray(rpc.data)) {
-        data = rpc.data
-      } else {
-        const sel = await supabase
-          .from('brochure')
-          .select('id,title,description,category,file_size,download_url,file_type,created')
-          .order('created', { ascending: false })
-        if (sel.error) throw sel.error
-        data = sel.data
-      }
+      if (sel.error) throw sel.error
+      const data = (sel.data ?? []) as any[]
 
-      const normalized: Brochure[] = (data ?? []).map((b: any) => ({
-        id: String(b.id),
-        title: b.title ?? 'Untitled',
-        description: b.description ?? '',
-        category: b.category ?? 'uncategorized',
-        file_size: b.file_size ?? '',
-        download_url: b.download_url ?? '',
-        file_type: b.file_type ?? '',
-        created: b.created ?? null,
-      }))
-
-      setRows(normalized)
+      setRows(
+        data.map((b) => ({
+          id: String(b.id),
+          title: b.title ?? 'Untitled',
+          description: b.description ?? '',
+          category: b.category ?? 'uncategorized',
+          file_size: b.file_size ?? '',
+          download_url: b.download_url ?? '',
+          file_type: b.file_type ?? '',
+          created: b.created ?? null,
+          last_opened_at_arr: Array.isArray(b.last_opened_at_arr) ? b.last_opened_at_arr : [],
+          last_opened_by_arr: Array.isArray(b.last_opened_by_arr) ? b.last_opened_by_arr : [],
+        }))
+      )
     } catch (e: any) {
       console.error('brochures load error:', e)
       setErrorMsg(e?.message ?? 'Failed to load brochures.')
@@ -78,9 +74,62 @@ export default function BrochureReview({ onBack }: Props) {
     }
   }
 
-  useEffect(() => {
-    load()
-  }, [])
+  useEffect(() => { load() }, [])
+
+  const fetchOne = async (brochureId: string): Promise<Brochure | null> => {
+    const { data, error } = await supabase
+      .from('brochure')
+      .select('id,title,description,category,file_size,download_url,file_type,created,last_opened_at_arr,last_opened_by_arr')
+      .eq('id', brochureId)
+      .maybeSingle()
+    if (error) { console.warn('fetchOne failed:', error.message); return null }
+    if (!data) return null
+    const b: any = data
+    return {
+      id: String(b.id),
+      title: b.title ?? 'Untitled',
+      description: b.description ?? '',
+      category: b.category ?? 'uncategorized',
+      file_size: b.file_size ?? '',
+      download_url: b.download_url ?? '',
+      file_type: b.file_type ?? '',
+      created: b.created ?? null,
+      last_opened_at_arr: Array.isArray(b.last_opened_at_arr) ? b.last_opened_at_arr : [],
+      last_opened_by_arr: Array.isArray(b.last_opened_by_arr) ? b.last_opened_by_arr : [],
+    }
+  }
+
+  const markBrochureOpened = async (brochureId: string) => {
+    const name = (currentRepName || '').trim()
+    if (!name) { setErrorMsg('Missing rep name from App.'); return }
+
+    const { error } = await supabase.rpc('mark_brochure_opened', {
+      p_id: String(brochureId),
+      p_rep_name: name,
+    })
+    if (error) { setErrorMsg(error.message); console.warn(error.message); return }
+
+    // Authoritative refresh: show DB-stamped arrays (Beirut time)
+    const fresh = await fetchOne(brochureId)
+    if (fresh) setRows((prev) => prev.map((r) => (r.id === brochureId ? fresh : r)))
+  }
+
+  const openLink = (url?: string | null) => {
+    if (!url) return
+    if (Platform.OS === 'web') {
+      // @ts-ignore
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const Linking = require('react-native').Linking
+      Linking.openURL(url)
+    }
+  }
+
+  const handleOpen = async (b: Brochure) => {
+    await markBrochureOpened(b.id)
+    openLink(b.download_url || '')
+  }
 
   const categories = useMemo(() => {
     const set = new Set<string>()
@@ -100,34 +149,17 @@ export default function BrochureReview({ onBack }: Props) {
     })
   }, [rows, q, category])
 
-  const openLink = (url?: string | null) => {
-    if (!url) return
-    if (Platform.OS === 'web') {
-      // @ts-ignore
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } else {
-      // Lazy import to avoid requiring expo-linking for web
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const Linking = require('react-native').Linking
-      Linking.openURL(url)
-    }
-  }
+  const latest = (arr?: string[] | null) =>
+    Array.isArray(arr) && arr.length > 0 ? arr[arr.length - 1] : null
 
   return (
     <View style={styles.screen}>
-      {/* Top bar */}
       <View style={styles.appBar}>
-        <Pressable onPress={onBack} style={styles.backBtn}>
-          <Text style={styles.backIcon}>‹</Text>
-        </Pressable>
+        <Pressable onPress={onBack} style={styles.backBtn}><Text style={styles.backIcon}>‹</Text></Pressable>
         <Text style={styles.title}>Brochures</Text>
-
-        <Pressable onPress={load} style={styles.reloadBtn}>
-          <Text style={styles.reloadText}>Reload</Text>
-        </Pressable>
+        <Pressable onPress={load} style={styles.reloadBtn}><Text style={styles.reloadText}>Reload</Text></Pressable>
       </View>
 
-      {/* Controls */}
       <View style={styles.controls}>
         <TextInput
           value={q}
@@ -137,113 +169,71 @@ export default function BrochureReview({ onBack }: Props) {
           style={styles.search}
           clearButtonMode="while-editing"
         />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 8, paddingHorizontal: 4 }}
-        >
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 4 }}>
           {categories.map((c) => {
             const active = category.toLowerCase() === c.toLowerCase()
             return (
-              <Pressable
-                key={c}
-                onPress={() => setCategory(c)}
-                style={[styles.filterChip, active && styles.filterChipActive]}
-              >
-                <Text style={[styles.filterText, active && styles.filterTextActive]}>
-                  {c.toUpperCase()}
-                </Text>
+              <Pressable key={c} onPress={() => setCategory(c)} style={[styles.filterChip, active && styles.filterChipActive]}>
+                <Text style={[styles.filterText, active && styles.filterTextActive]}>{c.toUpperCase()}</Text>
               </Pressable>
             )
           })}
         </ScrollView>
       </View>
 
-      {/* Body */}
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator />
-        </View>
+        <View style={styles.center}><ActivityIndicator /></View>
       ) : errorMsg ? (
         <View style={{ padding: 16 }}>
           <Text style={{ color: '#b91c1c', fontWeight: '800' }}>{errorMsg}</Text>
-          <Pressable onPress={load} style={[styles.btnPrimary, { marginTop: 10 }]}>
-            <Text style={styles.btnPrimarySolidText}>Retry</Text>
-          </Pressable>
+          <Pressable onPress={load} style={[styles.btnPrimary, { marginTop: 10 }]}><Text style={styles.btnPrimarySolidText}>Retry</Text></Pressable>
         </View>
       ) : filtered.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={{ color: '#6b7280' }}>No brochures match your filters.</Text>
-        </View>
+        <View style={styles.center}><Text style={{ color: '#6b7280' }}>No brochures match your filters.</Text></View>
       ) : (
         <ScrollView contentContainerStyle={[styles.grid, { gap, paddingHorizontal: 16 }]}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
-            {filtered.map((b) => (
-              <View key={b.id} style={[styles.card, { width: cardW }]}>
-                <View style={styles.cardHeader}>
-                  <View style={styles.iconWrap}>
-                    <Text style={styles.icon}>📄</Text>
+            {filtered.map((b) => {
+              const lastAt = latest(b.last_opened_at_arr)
+              const lastBy = latest(b.last_opened_by_arr)
+              return (
+                <View key={b.id} style={[styles.card, { width: cardW }]}>
+                  <View style={styles.cardHeader}>
+                    <View style={styles.iconWrap}><Text style={styles.icon}>📄</Text></View>
+                    <View style={{ flex: 1 }}>
+                      <Text numberOfLines={2} style={styles.cardTitle}>{b.title}</Text>
+                      {!!b.category && (<View style={styles.catChip}><Text style={styles.catText}>{b.category}</Text></View>)}
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text numberOfLines={2} style={styles.cardTitle}>
-                      {b.title}
-                    </Text>
-                    {!!b.category && (
-                      <View style={styles.catChip}>
-                        <Text style={styles.catText}>{b.category}</Text>
-                      </View>
-                    )}
+
+                  {!!b.description && (<Text numberOfLines={3} style={styles.desc}>{b.description}</Text>)}
+
+                  <View style={styles.metaRow}>
+                    {!!b.file_type && (<View style={styles.metaChip}><Text style={styles.metaText}>{b.file_type}</Text></View>)}
+                    {!!b.file_size && (<View style={styles.metaChip}><Text style={styles.metaText}>{b.file_size}</Text></View>)}
+                    {!!b.created && (<Text style={styles.dateText}>{new Date(b.created).toLocaleDateString()}</Text>)}
                   </View>
-                </View>
 
-                {!!b.description && (
-                  <Text numberOfLines={3} style={styles.desc}>
-                    {b.description}
-                  </Text>
-                )}
-
-                <View style={styles.metaRow}>
-                  {!!b.file_type && (
-                    <View style={styles.metaChip}>
-                      <Text style={styles.metaText}>{b.file_type}</Text>
+                  {(lastAt || lastBy) && (
+                    <View style={{ marginTop: 8 }}>
+                      <Text style={{ fontSize: 11, color: '#64748b' }}>
+                        {lastAt ? `Last opened ${lastAt}` : 'Last opened —'}
+                        {lastBy ? ` by ${lastBy}` : ''}
+                      </Text>
                     </View>
                   )}
-                  {!!b.file_size && (
-                    <View style={styles.metaChip}>
-                      <Text style={styles.metaText}>{b.file_size}</Text>
-                    </View>
-                  )}
-                  {!!b.created && (
-                    <Text style={styles.dateText}>
-                      {new Date(b.created).toLocaleDateString()}
-                    </Text>
-                  )}
-                </View>
 
-                <View style={styles.actions}>
-                  <Pressable
-                    onPress={() => openLink(b.download_url || '')}
-                    style={({ pressed }) => [
-                      styles.btnPrimarySolid,
-                      pressed && { transform: [{ translateY: 1 }], opacity: 0.95 },
-                    ]}
-                  >
-                    <Text style={styles.btnPrimarySolidText}>Download</Text>
-                  </Pressable>
-                  {!!b.download_url && (
+                  <View style={styles.actions}>
                     <Pressable
-                      onPress={() => openLink(b.download_url || '')}
-                      style={({ pressed }) => [
-                        styles.btnGhost,
-                        pressed && { transform: [{ translateY: 1 }], opacity: 0.9 },
-                      ]}
+                      onPress={() => markBrochureOpened(b.id).then(() => { if (b.download_url) openLink(b.download_url) })}
+                      style={({ pressed }) => [styles.btnPrimarySolid, pressed && { transform: [{ translateY: 1 }], opacity: 0.95 }]}
                     >
-                      <Text style={styles.btnGhostText}>Open</Text>
+                      <Text style={styles.btnPrimarySolidText}>Open</Text>
                     </Pressable>
-                  )}
+                  </View>
                 </View>
-              </View>
-            ))}
+              )
+            })}
           </View>
           <View style={{ height: 24 }} />
         </ScrollView>
@@ -255,128 +245,63 @@ export default function BrochureReview({ onBack }: Props) {
 /* ---------------- styles ---------------- */
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f6f7fb' },
-
   btnPrimary: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 44,
+    backgroundColor: '#2563eb', borderRadius: 12, alignItems: 'center', justifyContent: 'center', height: 44,
     // @ts-ignore rn-web
     cursor: 'pointer',
   },
-
   appBar: {
-    paddingTop: 18,
-    paddingBottom: 12,
-    paddingHorizontal: 16,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#edf0f5',
+    paddingTop: 18, paddingBottom: 12, paddingHorizontal: 16, backgroundColor: '#ffffff',
+    borderBottomWidth: 1, borderBottomColor: '#edf0f5',
     // @ts-ignore rn-web
     boxShadow: '0 6px 18px rgba(17,24,39,0.06)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
   },
-  backBtn: {
-    width: 40, height: 40, borderRadius: 10,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: '#f3f4f6',
-  },
+  backBtn: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f3f4f6' },
   backIcon: { fontSize: 26, lineHeight: 26, color: '#111827' },
   title: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: '#0f172a' },
-  reloadBtn: {
-    height: 36, paddingHorizontal: 12, borderRadius: 999,
-    borderWidth: 1, borderColor: '#e5e7eb', alignItems: 'center',
-    justifyContent: 'center', backgroundColor: '#eef2ff',
-  },
+  reloadBtn: { height: 36, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: '#e5e7eb', alignItems: 'center', justifyContent: 'center', backgroundColor: '#eef2ff' },
   reloadText: { color: '#1d4ed8', fontWeight: '800', fontSize: 12 },
 
   controls: { paddingHorizontal: 16, paddingTop: 12, gap: 10 },
-  search: {
-    height: 42, backgroundColor: '#f2f4f7', borderRadius: 12,
-    borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, color: '#111827',
-  },
+  search: { height: 42, backgroundColor: '#f2f4f7', borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, color: '#111827' },
 
-  filterChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  filterChipActive: {
-    backgroundColor: '#2563eb',
-    borderColor: '#1d4ed8',
-  },
-  filterText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#1e293b',
-  },
-  filterTextActive: {
-    color: '#fff',
-  },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999, backgroundColor: '#f3f4f6', borderWidth: 1, borderColor: '#e5e7eb' },
+  filterChipActive: { backgroundColor: '#2563eb', borderColor: '#1d4ed8' },
+  filterText: { fontSize: 13, fontWeight: '700', color: '#1e293b' },
+  filterTextActive: { color: '#fff' },
 
   grid: { paddingTop: 16, paddingBottom: 8 },
 
   card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#edf0f5',
-    padding: 14,
-    justifyContent: 'space-between',
+    backgroundColor: '#ffffff', borderRadius: 16, borderWidth: 1, borderColor: '#edf0f5', padding: 14, justifyContent: 'space-between',
     // @ts-ignore rn-web
     boxShadow: '0 8px 20px rgba(0,0,0,0.06)',
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 6 },
-  iconWrap: {
-    width: 44, height: 44, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: '#e7f3ff',
-  },
+  iconWrap: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#e7f3ff' },
   icon: { fontSize: 22 },
   cardTitle: { fontSize: 15, fontWeight: '800', color: '#0f172a' },
 
-  catChip: {
-    alignSelf: 'flex-start',
-    marginTop: 4,
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
-    backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#e5e7eb',
-  },
+  catChip: { alignSelf: 'flex-start', marginTop: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#eef2ff', borderWidth: 1, borderColor: '#e5e7eb' },
   catText: { fontSize: 11, fontWeight: '800', color: '#1d4ed8' },
 
   desc: { color: '#475569', marginTop: 6, fontSize: 13 },
 
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  metaChip: {
-    paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
-    backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e5e7eb',
-  },
+  metaChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e5e7eb' },
   metaText: { fontSize: 11, color: '#0f172a' },
   dateText: { marginLeft: 'auto', fontSize: 11, color: '#94a3b8' },
 
   actions: { flexDirection: 'row', gap: 10, marginTop: 14 },
-
   btnPrimarySolid: {
-    flex: 1, height: 44, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563eb',
+    flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563eb',
     // @ts-ignore rn-web
     cursor: 'pointer',
     // @ts-ignore rn-web
     boxShadow: '0 1px 0 rgba(0,0,0,0.06) inset',
   },
   btnPrimarySolidText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.2 },
-
-  btnGhost: {
-    flex: 1, height: 44, borderRadius: 12, borderWidth: 1, borderColor: '#e5e7eb',
-    alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc',
-    // @ts-ignore rn-web
-    cursor: 'pointer',
-  },
-  btnGhostText: { fontSize: 13, fontWeight: '800', color: '#0f766e' },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 })

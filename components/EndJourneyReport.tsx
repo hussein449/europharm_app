@@ -25,7 +25,11 @@ type VisitRow = {
   samples_distributed: number | null
 }
 
-type Props = { onBack?: () => void }
+type Props = {
+  onBack?: () => void
+  /** Pass { id, username } from App so we can scope to that rep */
+  currentUser?: { id: string; username: string }
+}
 
 /* --- helpers --- */
 function toISO(d: Date) {
@@ -46,18 +50,12 @@ function Pill({ label, active, onPress }: { label: string; active: boolean; onPr
 }
 
 /**
- * Parse samples embedded in notes.
- * Accepts lines like:
- *   "Samples: flagyl x2, paracetamol x1"
- *   "samples - Flagyl 2; Pracetamol ×3"
- * Returns the cleaned notes (without the samples lines),
- * a list of {name, qty}, and a computed total.
+ * Parse "Samples:" lines out of notes → { cleanNotes, items[], total }
  */
 function parseSamplesFromNotes(notesRaw: string | null) {
   const notes = (notesRaw ?? '').trim()
   if (!notes) return { cleanNotes: '', items: [] as { name: string; qty: number }[], total: 0 }
 
-  // Grab any line that starts with "samples" (case-insensitive)
   const lines = notes.split(/\r?\n/)
   const sampleLines: string[] = []
   const otherLines: string[] = []
@@ -68,22 +66,16 @@ function parseSamplesFromNotes(notesRaw: string | null) {
   }
 
   const items: { name: string; qty: number }[] = []
-
-  // Parse each "Samples:" line into (name, qty) pairs split by comma/semicolon
   for (const s of sampleLines) {
-    // After "Samples:" or "Samples -" take the rest
     const body = s.replace(/^\s*samples\s*[:\-]\s*/i, '')
     const tokens = body.split(/[;,]/).map(t => t.trim()).filter(Boolean)
     for (const tok of tokens) {
-      // Match patterns like:
-      //  "flagyl x2"  | "flagyl ×2" | "flagyl 2"
       const m = tok.match(/^([\p{L}\p{N}\s.'\-_/()]+?)\s*(?:[x×]\s*)?(\d+)$/u)
       if (m) {
         const name = m[1].trim().replace(/\s+/g, ' ')
         const qty = parseInt(m[2], 10)
         if (name && Number.isFinite(qty)) items.push({ name, qty })
       } else {
-        // If no trailing qty, try to split first number anywhere
         const m2 = tok.match(/^(.+?)\s+(\d+)$/)
         if (m2) {
           const name2 = m2[1].trim()
@@ -96,11 +88,10 @@ function parseSamplesFromNotes(notesRaw: string | null) {
 
   const total = items.reduce((s, it) => s + (it.qty || 0), 0)
   const cleanNotes = otherLines.join('\n').trim()
-
   return { cleanNotes, items, total }
 }
 
-export default function EndJourneyReport({ onBack }: Props) {
+export default function EndJourneyReport({ onBack, currentUser }: Props) {
   // default range: current month
   const today = new Date()
   const startMonth = new Date(today.getFullYear(), today.getMonth(), 1)
@@ -112,14 +103,16 @@ export default function EndJourneyReport({ onBack }: Props) {
   const [refreshing, setRefreshing] = useState(false)
   const [rows, setRows] = useState<VisitRow[]>([])
 
-  // expand/collapse per user
+  // expand/collapse per user (usually one user when scoped)
   const [openUser, setOpenUser] = useState<string | null>(null)
 
-  // username search
+  // username search (hidden when scoped)
   const [search, setSearch] = useState('')
 
   // visit details modal
   const [selected, setSelected] = useState<VisitRow | null>(null)
+
+  const username = (currentUser?.username ?? '').trim() || null
 
   const applyPreset = (p: 'month' | 'week') => {
     setPreset(p)
@@ -135,28 +128,49 @@ export default function EndJourneyReport({ onBack }: Props) {
     }
   }
 
+  const normalize = (data: any[]): VisitRow[] =>
+    (data ?? []).map((r: any) => ({
+      id: String(r.id),
+      visit_date: String(r.visit_date ?? '').slice(0, 10),
+      client_name: String(r.client_name ?? '—'),
+      visited_by: r.visited_by ?? null,
+      status: r.status ?? null,
+      note_type: r.note_type ?? null,
+      notes: r.notes ?? null,
+      samples_distributed: Number.isFinite(r.samples_distributed) ? r.samples_distributed : (r.samples_distributed ?? 0),
+    }))
+
   const load = async () => {
     setLoading(true)
     try {
-      const { data, error } = await supabase
+      if (!username) {
+        // No username → don't leak anything
+        setRows([])
+        setLoading(false)
+        return
+      }
+
+      // 1) normal: only this rep’s visits
+      const base = supabase
         .from('visits')
         .select('id, visit_date, client_name, visited_by, status, note_type, notes, samples_distributed')
         .gte('visit_date', startDate)
         .lte('visit_date', endDate)
         .order('visit_date', { ascending: false })
 
-      if (error) throw error
-      const normalized: VisitRow[] = (data ?? []).map((r: any) => ({
-        id: String(r.id),
-        visit_date: String(r.visit_date ?? '').slice(0, 10),
-        client_name: String(r.client_name ?? '—'),
-        visited_by: r.visited_by ?? null,
-        status: r.status ?? null,
-        note_type: r.note_type ?? null,
-        notes: r.notes ?? null,
-        samples_distributed: Number.isFinite(r.samples_distributed) ? r.samples_distributed : (r.samples_distributed ?? 0),
-      }))
-      setRows(normalized)
+      const { data: mine, error: errMine } = await base.eq('visited_by', username)
+      if (errMine) throw errMine
+
+      if (mine && mine.length > 0) {
+        setRows(normalize(mine))
+        return
+      }
+
+      // 2) legacy fallback: include rows where visited_by IS NULL (older app versions didn’t set it)
+      const { data: legacy, error: errLegacy } = await base.is('visited_by', null)
+      if (errLegacy) throw errLegacy
+
+      setRows(normalize(legacy || []))
     } catch (e: any) {
       console.error('report load error:', e)
       Alert.alert('Load failed', e?.message ?? 'Could not load end-journey report.')
@@ -165,7 +179,7 @@ export default function EndJourneyReport({ onBack }: Props) {
     }
   }
 
-  useEffect(() => { load() }, [startDate, endDate])
+  useEffect(() => { load() }, [startDate, endDate, username])
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -200,15 +214,15 @@ export default function EndJourneyReport({ onBack }: Props) {
     return obj
   }, [byUser])
 
-  // user list + filter by search
+  // user list + filter by search (search hidden when scoped)
   const users = useMemo(() => {
     const all = Array.from(byUser.keys())
     const q = search.trim().toLowerCase()
-    const filtered = q
-      ? all.filter(u => (u ?? '').toLowerCase().includes(q))
-      : all
+    const filtered = q ? all.filter(u => (u ?? '').toLowerCase().includes(q)) : all
     return filtered.sort((a, b) => a.localeCompare(b))
   }, [byUser, search])
+
+  const showSearch = false // scoped view; keep search hidden
 
   return (
     <View style={styles.screen}>
@@ -240,17 +254,19 @@ export default function EndJourneyReport({ onBack }: Props) {
           </View>
         </View>
 
-        {/* Search by username */}
-        <View style={{ marginTop: 10 }}>
-          <Text style={styles.inputLabel}>Search by username</Text>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="e.g. hussein"
-            placeholderTextColor="#9aa0a6"
-            style={styles.input}
-          />
-        </View>
+        {/* Search by username — hidden when scoped */}
+        {showSearch && (
+          <View style={{ marginTop: 10 }}>
+            <Text style={styles.inputLabel}>Search by username</Text>
+            <TextInput
+              value={search}
+              onChangeText={setSearch}
+              placeholder="e.g. hussein"
+              placeholderTextColor="#9aa0a6"
+              style={styles.input}
+            />
+          </View>
+        )}
       </View>
 
       {/* Content */}
@@ -262,7 +278,7 @@ export default function EndJourneyReport({ onBack }: Props) {
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyEmoji}>🗺️</Text>
           <Text style={styles.emptyTitle}>No journeys in the selected range</Text>
-          <Text style={styles.emptySub}>Try switching the preset or clearing the search.</Text>
+          <Text style={styles.emptySub}>Try switching the preset.</Text>
         </View>
       ) : (
         <ScrollView

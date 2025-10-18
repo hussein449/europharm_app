@@ -55,6 +55,7 @@ export default function App() {
             if (key === 'achievements') setScreen('achievements')
             if (key === 'end_journey') setScreen('end_report') // <-- map your tile key
           }}
+          welcomeName={user?.username}
         />
       )}
 
@@ -88,7 +89,7 @@ export default function App() {
       )}
 
       {screen === 'brochures' && (
-        <BrochureReview onBack={() => setScreen('home')} />
+        <BrochureReview onBack={() => setScreen('home')} currentRepName={user.username} />
       )}
 
       {screen === 'visits' && (
@@ -100,6 +101,7 @@ export default function App() {
 
       {screen === 'end_report' && (
         <EndJourneyReport
+          currentUser={user}          // <-- ✅ pass the logged-in user here
           onBack={() => setScreen('home')}
         />
       )}
