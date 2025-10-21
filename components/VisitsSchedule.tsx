@@ -8,7 +8,7 @@ import { startTracking, stopTracking, setCurrentVisitId } from '../lib/tracking'
 
 type VisitRow = {
   id: string
-  visit_date: string   // YYYY-MM-DD
+  visit_date: string
   status: 'planned' | 'en_route' | 'done' | 'skipped' | string
   client_name: string
   specialty?: string | null
@@ -16,24 +16,25 @@ type VisitRow = {
   notes?: string | null
   visited_by?: string | null
   note_type?: 'SALES ORDER' | 'RFR' | 'COLLECTION' | string | null
+  sample_type?: string[] | null
+  sample_distributed?: number[] | null
 }
 
 type UserLite = { id: string; username: string }
 type Props = { onBack?: () => void; currentUser?: UserLite }
 
-/** ---------- Samples types (exact columns) ---------- */
 type SampleStock = { id: string; sample_type: string; qty: number }
-type SampleLine  = { type: string; qty: string } // string for input binding
+type SampleLine  = { type: string; qty: string }
 
-/** flip this if you want the user to also see unassigned visits */
 const SHOW_UNASSIGNED = true
 
 export default function VisitsSchedule({ onBack, currentUser }: Props) {
-  const username = (currentUser?.username ?? '').trim() || null
+  const me = (currentUser?.username ?? '').trim() || null
+  const [resolvedUsername, setResolvedUsername] = useState<string | null>(null)
 
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
-  const [month, setMonth] = useState(today.getMonth()) // 0-11
+  const [month, setMonth] = useState(today.getMonth())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -51,31 +52,35 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   const [loadingSamples, setLoadingSamples] = useState(false)
   const [stock, setStock] = useState<SampleStock[]>([])
   const [sampleLines, setSampleLines] = useState<SampleLine[]>([{ type: '', qty: '' }])
+  const [sampleError, setSampleError] = useState<string | null>(null)
 
-  // weekly send status popup
+  // toast (reused for multiple actions)
   const [sendStatus, setSendStatus] = useState<'idle'|'sending'|'success'|'error'>('idle')
   const [sendMessage, setSendMessage] = useState<string>('')
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showToast = (kind: 'neutral'|'success'|'error', msg: string, ms = 1400) => {
+    if (hideTimer.current) { clearTimeout(hideTimer.current); hideTimer.current = null }
+    setSendStatus(kind === 'neutral' ? 'sending' : kind)
+    setSendMessage(msg)
+    hideTimer.current = setTimeout(() => { setSendStatus('idle'); setSendMessage('') }, ms)
+  }
 
   const range = monthRange(year, month)
 
-  /* ---------------- load / refresh ---------------- */
+  /* load / refresh */
   const load = async () => {
     setLoading(true); setErrorMsg(null)
     try {
       let query = supabase
         .from('visits')
-        .select('id, visit_date, status, client_name, specialty, area, notes, visited_by, note_type')
+        .select('id, visit_date, status, client_name, specialty, area, notes, visited_by, note_type, sample_type, sample_distributed')
         .gte('visit_date', range.start)
         .lte('visit_date', range.end)
 
-      // scope by user
-      if (username) {
-        if (SHOW_UNASSIGNED) {
-          query = query.or(`visited_by.is.null,visited_by.eq.${username}`)
-        } else {
-          query = query.eq('visited_by', username)
-        }
+      if (me) {
+        query = SHOW_UNASSIGNED
+          ? query.or(`visited_by.eq.${me},visited_by.is.null`)
+          : query.eq('visited_by', me)
       } else {
         query = query.is('visited_by', null)
       }
@@ -83,22 +88,22 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       const { data, error } = await query.order('visit_date', { ascending: true })
       if (error) throw error
 
-      const normalized: VisitRow[] =
-        (data ?? []).map((r: any) => ([
-          'id','visit_date','status','client_name','specialty','area','notes','visited_by','note_type'
-        ].reduce((acc: any, k: string) => { acc[k] = r[k]; return acc }, {}))) as VisitRow[]
-
-      for (const r of normalized) {
-        r.id = String(r.id)
-        r.visit_date = String(r.visit_date ?? '').slice(0, 10)
-        r.status = (r.status ?? 'planned')
-        r.client_name = String(r.client_name ?? '—')
-        r.specialty = r.specialty ?? '—'
-        r.area = r.area ?? '—'
-        r.notes = r.notes ?? null
-        r.visited_by = r.visited_by ?? null
-        r.note_type = (r.note_type ?? null) as any
-      }
+      const normalized: VisitRow[] = (data as any[] ?? []).map((r: any) => {
+        const v: VisitRow = {
+          id: String(r.id),
+          visit_date: String(r.visit_date ?? '').slice(0, 10),
+          status: (r.status ?? 'planned'),
+          client_name: String(r.client_name ?? '—'),
+          specialty: r.specialty ?? '—',
+          area: r.area ?? '—',
+          notes: r.notes ?? null,
+          visited_by: r.visited_by ?? null,
+          note_type: r.note_type ?? null,
+          sample_type: Array.isArray(r.sample_type) ? r.sample_type : null,
+          sample_distributed: Array.isArray(r.sample_distributed) ? r.sample_distributed : null,
+        }
+        return v
+      })
 
       setRows(normalized)
 
@@ -121,15 +126,69 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setRefreshing(false)
   }
 
-  useEffect(() => { load() }, [year, month, username])
+  useEffect(() => { load() }, [year, month])
   useEffect(() => { setNewDate(selectedDay) }, [selectedDay])
 
-  /** Preload samples once user is known so chips aren’t empty the first time */
-  useEffect(() => {
-    if (!username) return
-    void loadSampleStock(username)
-  }, [username])
+  /* samples helpers */
+  const loadSampleStock = async (u: string) => {
+    setLoadingSamples(true)
+    try {
+      const { data, error } = await (supabase as any)
+        .from('sample_distribution')
+        .select('id, username, sample_type, qty')
+        .eq('username', u)
+        .order('sample_type', { ascending: true })
+      if (error) throw error
+      const norm: SampleStock[] = (data as any[] ?? []).map((r: any) => ({
+        id: String(r.id),
+        sample_type: String(r.sample_type ?? 'UNKNOWN'),
+        qty: Number(r.qty ?? 0) || 0,
+      }))
+      setStock(norm)
+    } catch (e: any) {
+      console.error('load sample stock error:', e)
+      Alert.alert('Samples', e?.message ?? 'Failed to load samples.')
+      setStock([])
+    } finally {
+      setLoadingSamples(false)
+    }
+  }
 
+  async function findSampleRow(u: string, type: string): Promise<SampleStock | null> {
+    const { data, error } = await (supabase as any)
+      .from('sample_distribution')
+      .select('id, username, sample_type, qty')
+      .eq('username', u)
+      .ilike('sample_type', type)
+      .limit(1)
+    if (error) throw error
+    const row = (data as any[] ?? [])[0]
+    if (!row) return null
+    return { id: String(row.id), sample_type: String(row.sample_type), qty: Number(row.qty ?? 0) || 0 }
+  }
+
+  async function decrementStock(u: string, type: string, delta: number) {
+    const existing = await findSampleRow(u, type)
+    if (!existing) {
+      const ins = await (supabase as any)
+        .from('sample_distribution')
+        .insert([{ username: u, sample_type: type, qty: 0 }])
+        .select('id')
+        .limit(1)
+      if (ins.error) throw ins.error
+    }
+    const row = await findSampleRow(u, type)
+    if (!row) throw new Error('Failed to create/find sample row')
+
+    const newQty = Math.max(0, row.qty - delta)
+    const { error: updErr } = await (supabase as any)
+      .from('sample_distribution')
+      .update({ qty: newQty })
+      .eq('id', row.id)
+    if (updErr) throw updErr
+  }
+
+  /* derived */
   const byDate = useMemo(() => {
     const m = new Map<string, VisitRow[]>()
     for (const r of rows) {
@@ -142,11 +201,10 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
 
   const dayVisits = byDate.get(selectedDay) ?? []
 
-  /* ---------------- month nav ---------------- */
+  /* month nav */
   const prevMonth = () => {
     const d = new Date(year, month, 1); d.setMonth(month - 1)
     setYear(d.getFullYear()); setMonth(d.getMonth())
-    // reset journey state switching months
     setJourneyMode(false); setActiveVisitId(null); setCurrentVisitId(null).catch(()=>{})
   }
   const nextMonth = () => {
@@ -155,11 +213,13 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setJourneyMode(false); setActiveVisitId(null); setCurrentVisitId(null).catch(()=>{})
   }
 
-  /* ---------------- journey actions ---------------- */
+  /* journey actions */
   const startJourney = async () => {
     if (dayVisits.length === 0) return
     try {
-      await startTracking(username ?? null)
+      const v = activeVisitId ? rows.find(r => r.id === activeVisitId) : undefined
+      const who = (v?.visited_by ?? me) ?? null
+      await startTracking(who)
       setJourneyMode(true)
       setActiveVisitId(null)
       await setCurrentVisitId(null)
@@ -176,20 +236,19 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     const nextStatus = visit.status === 'en_route' ? 'planned' : 'en_route'
 
     try {
+      const who: string | null = (visit.visited_by ?? me) ?? null
       const { error } = await supabase
         .from('visits')
         .update({
           status: nextStatus,
-          visited_by: nextStatus === 'en_route'
-            ? username
-            : (visit.visited_by ?? username),
+          visited_by: nextStatus === 'en_route' ? who : (visit.visited_by ?? who ?? null),
         })
         .eq('id', visit.id)
       if (error) throw error
 
       setRows(prev => prev.map(r =>
         r.id === visit.id
-          ? { ...r, status: nextStatus, visited_by: nextStatus === 'en_route' ? (username ?? r.visited_by ?? null) : r.visited_by }
+          ? { ...r, status: nextStatus, visited_by: nextStatus === 'en_route' ? (who ?? r.visited_by ?? null) : r.visited_by }
           : r
       ))
 
@@ -208,113 +267,94 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     }
   }
 
-  /** ---------- STOCK LOADER (exact schema) ---------- */
-  const loadSampleStock = async (u: string) => {
-    setLoadingSamples(true)
-    try {
-      const { data, error } = await (supabase as any)
-        .from('sample_distribution')
-        .select('id, username, sample_type, qty')
-        .eq('username', u)
-        .order('sample_type', { ascending: true })
-
-      if (error) throw error
-
-      const norm: SampleStock[] = (data ?? []).map((r: any) => ({
-        id: String(r.id),
-        sample_type: String(r.sample_type ?? 'UNKNOWN'),
-        qty: Number(r.qty ?? 0) || 0,
-      }))
-
-      setStock(norm)
-    } catch (e: any) {
-      console.error('load sample stock error:', e)
-      Alert.alert('Samples', e?.message ?? 'Failed to load samples.')
-      setStock([])
-    } finally {
-      setLoadingSamples(false)
-    }
-  }
-
-  /** Find one row in sample_distribution for {username, sample_type} */
-  async function findSampleRow(u: string, type: string): Promise<SampleStock | null> {
-    const { data, error } = await (supabase as any)
-      .from('sample_distribution')
-      .select('id, username, sample_type, qty')
-      .eq('username', u)
-      .eq('sample_type', type)
-      .limit(1)
-
-    if (error) throw error
-    const row = (data ?? [])[0]
-    if (!row) return null
-    return {
-      id: String(row.id),
-      sample_type: String(row.sample_type),
-      qty: Number(row.qty ?? 0) || 0,
-    }
-  }
-
-  /** Decrement stock for a specific sample type (insert zero row if missing) */
-  async function decrementStock(u: string, type: string, delta: number) {
-    const existing = await findSampleRow(u, type)
-
-    if (!existing) {
-      // Ensure a row exists; insert with qty 0 first
-      const ins = await (supabase as any)
-        .from('sample_distribution')
-        .insert([{ username: u, sample_type: type, qty: 0, created_at: new Date().toISOString() }])
-        .select('id')
-        .limit(1)
-      if (ins.error) throw ins.error
-    }
-
-    // Now fetch again to get current qty and id
-    const row = await findSampleRow(u, type)
-    if (!row) throw new Error('Failed to create/find sample row')
-
-    const newQty = Math.max(0, row.qty - delta)
-    const { error: updErr } = await (supabase as any)
-      .from('sample_distribution')
-      .update({ qty: newQty })
-      .eq('id', row.id)
-
-    if (updErr) throw updErr
-  }
-
-  /** Open finish modal and load stock for this user */
+  /* modal open */
   const endJourneyOpen = async () => {
-    if (!activeVisitId) {
-      Alert.alert('Select a visit', 'Pick a visit (checkbox) to end.')
-      return
+    if (!activeVisitId) return Alert.alert('Select a visit', 'Pick a visit (checkbox) to end.')
+
+    const v = rows.find(r => r.id === activeVisitId)
+    let who = (v?.visited_by ?? '').trim()
+
+    if (!who) {
+      if (!me) return Alert.alert('Missing visitor', 'No logged-in user to assign.')
+      const { error } = await supabase.from('visits').update({ visited_by: me }).eq('id', activeVisitId)
+      if (error) return Alert.alert('Error', error.message ?? 'Failed to set visitor on the visit.')
+      who = me
+      setRows(prev => prev.map(r => r.id === activeVisitId ? { ...r, visited_by: me } : r))
     }
+
+    setResolvedUsername(who)
     setSummary('')
     setNoteType('SALES ORDER')
     setSampleLines([{ type: '', qty: '' }])
+    setSampleError(null)
     setShowFinishModal(true)
 
-    if (username) {
-      await loadSampleStock(username)
-    } else {
-      setStock([])
-    }
+    await loadSampleStock(who)
   }
 
-  // --- helpers to edit sample lines
+  /* sample line helpers + live validation */
+  const recalcSampleError = (lines: SampleLine) => {} // no-op to satisfy TS predeclare (we redefine below)
+
   const setLineType = (idx: number, v: string) => {
-    setSampleLines(prev => prev.map((l, i) => i === idx ? { ...l, type: v } : l))
+    setSampleLines(prev => {
+      const newLines = prev.map((l, i) => i === idx ? { ...l, type: v } : l)
+      validateRequestedSamples(newLines)
+      return newLines
+    })
   }
   const setLineQty = (idx: number, v: string) => {
     const clean = v.replace(/[^\d]/g, '')
-    setSampleLines(prev => prev.map((l, i) => i === idx ? { ...l, qty: clean } : l))
+    setSampleLines(prev => {
+      const newLines = prev.map((l, i) => i === idx ? { ...l, qty: clean } : l)
+      validateRequestedSamples(newLines)
+      return newLines
+    })
   }
-  const addLine = () => setSampleLines(prev => [...prev, { type: '', qty: '' }])
-  const removeLine = (idx: number) => setSampleLines(prev => prev.filter((_, i) => i !== idx))
+  const addLine = () => setSampleLines(prev => {
+    const newLines = [...prev, { type: '', qty: '' }]
+    validateRequestedSamples(newLines)
+    return newLines
+  })
+  const removeLine = (idx: number) => setSampleLines(prev => {
+    const newLines = prev.filter((_, i) => i !== idx)
+    validateRequestedSamples(newLines)
+    return newLines
+  })
 
-  // *** finish journey with sample validation & stock decrement ***
+  /** Validate requested samples against stock; sets sampleError and optional toast */
+  const validateRequestedSamples = (lines: SampleLine[]) => {
+    if (!stock.length) { setSampleError(null); return true }
+    const req = new Map<string, number>()
+    for (const l of lines) {
+      const t = (l.type || '').trim()
+      const q = l.qty === '' ? 0 : Number(l.qty)
+      if (!t || !q) continue
+      req.set(t, (req.get(t) ?? 0) + q)
+    }
+    for (const [t, q] of req.entries()) {
+      const found = stock.find(s => s.sample_type.toLowerCase() === t.toLowerCase())
+      const avail = found?.qty ?? 0
+      if (q > avail) {
+        const msg = `Only ${avail} of "${t}" available (requested ${q}).`
+        setSampleError(msg)
+        showToast('error', msg, 1600)
+        return false
+      }
+    }
+    setSampleError(null)
+    return true
+  }
+
+  /* finish journey */
   const endJourneyConfirm = async () => {
     const vid = activeVisitId
     if (!vid) return
+
+    const who = resolvedUsername ?? me
+    if (!who) return Alert.alert('Samples', 'No visitor resolved for this visit.')
+
+    // live validation before saving
+    if (!validateRequestedSamples(sampleLines)) return
 
     // collect requested samples
     const reqMap = new Map<string, number>()
@@ -328,43 +368,32 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       reqMap.set(t, (reqMap.get(t) ?? 0) + q)
     }
 
-    // check against loaded stock
-    for (const [t, q] of reqMap.entries()) {
-      const found = stock.find(s => s.sample_type.toLowerCase() === t.toLowerCase())
-      const avail = found?.qty ?? 0
-      if (q > avail) {
-        return Alert.alert('Samples', `Not enough "${t}". Available: ${avail}, requested: ${q}.`)
-      }
-    }
-
-    const samplesStr = Array.from(reqMap.entries())
-      .map(([t, q]) => `${t} x${q}`)
-      .join('; ')
+    // build arrays for visits: order deterministic
+    const entries = Array.from(reqMap.entries()).sort((a,b) => a[0].localeCompare(b[0]))
+    const sample_type: string[] = entries.map(([t]) => t)
+    const sample_distributed: number[] = entries.map(([,q]) => q)
+    const samplesStr = entries.map(([t, q]) => `${t} x${q}`).join('; ')
 
     try {
-      // mark visit done
-      const newNotes = [
-        (summary || '').trim(),
-        samplesStr ? `Samples: ${samplesStr}` : null
-      ].filter(Boolean).join('\n')
+      const newNotes = [(summary || '').trim(), sample_type.length ? `Samples: ${samplesStr}` : null]
+        .filter(Boolean).join('\n')
 
       const { error: updErr, status } = await supabase
         .from('visits')
         .update({
           status: 'done',
           notes: newNotes,
-          visited_by: username,
+          visited_by: who,
           note_type: noteType,
+          sample_type,
+          sample_distributed,
         })
         .eq('id', vid)
 
-      if (updErr && updErr.code !== 'PGRST116' && status !== 406) {
-        throw updErr
-      }
+      if (updErr && updErr.code !== 'PGRST116' && status !== 406) throw updErr
 
-      // decrement each sample type
-      for (const [t, q] of reqMap.entries()) {
-        await decrementStock(username ?? '(unknown)', t, q)
+      for (const [t, q] of entries) {
+        await decrementStock(who, t, q)
       }
 
       await stopTracking()
@@ -374,19 +403,20 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       setActiveVisitId(null)
       setSummary('')
       setSampleLines([{ type: '', qty: '' }])
+      setSampleError(null)
 
-      // refresh both visits and stock so UI reflects changes immediately
       await load()
-      if (username) await loadSampleStock(username)
+      await loadSampleStock(who)
 
+      showToast('success', 'Visit saved ✓')
       if (Platform.OS === 'web') console.log('Visit finished OK', { vid, noteType, samplesStr })
     } catch (e: any) {
       console.error('finish visit update error', e)
-      Alert.alert('Error', e?.message ?? 'Failed to finish visit.')
+      showToast('error', e?.message ?? 'Failed to finish visit.')
     }
   }
 
-  /* ---------------- weekly schedule send ---------------- */
+  /* weekly schedule send */
   const weekRange = useMemo(() => weekRangeFromISO(selectedDay), [selectedDay])
 
   const sendWeek = async () => {
@@ -395,12 +425,11 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     setSendMessage('Sending this week’s schedule…')
 
     try {
-      const uname = username || '(unknown)'
       const { start, end } = weekRange
       const weekly = rows.filter(r => r.visit_date >= start && r.visit_date <= end)
 
       const payload = [{
-        username: uname,
+        username: me || '(unknown)',
         week_start: start,
         week_end: end,
         visits: weekly.map(v => ({
@@ -410,6 +439,8 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
           status: v.status,
           type: v.note_type ?? null,
           notes: v.notes ?? null,
+          sample_type: v.sample_type ?? null,
+          sample_distributed: v.sample_distributed ?? null,
         })),
       }]
 
@@ -430,7 +461,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
     }
   }
 
-  /* ---------------- add visit ---------------- */
+  /* add visit */
   const [showAddModal, setShowAddModal] = useState(false)
   const [newName, setNewName] = useState('')
   const [newSpec, setNewSpec] = useState('')
@@ -458,18 +489,20 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
           area: newArea || null,
           visit_date: date,
           status: 'planned',
-          visited_by: username,
+          visited_by: me,
           note_type: null,
+          sample_type: [],
+          sample_distributed: [],
         }])
-
       if (error) throw error
 
       await load()
       setShowAddModal(false)
       setSelectedDay(date)
+      showToast('success', 'Visit saved ✓')
     } catch (e: any) {
       console.error('add visit error', e)
-      Alert.alert('Error', e?.message ?? 'Failed to add visit.')
+      showToast('error', e?.message ?? 'Failed to add visit.')
     }
   }
 
@@ -478,16 +511,9 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
       <View style={styles.appBar}>
         <Pressable onPress={onBack} style={styles.backBtn}><Text style={styles.backIcon}>‹</Text></Pressable>
         <Text style={styles.title}>Visits & Schedule</Text>
-        {/* Small stock peek so you know data loaded */}
-        {!!stock.length && (
-          <Text style={{ fontSize: 11, fontWeight: '800', color: '#6b7280' }}>
-            Samples: {stock.reduce((a, s) => a + (s.qty || 0), 0)}
-          </Text>
-        )}
         <View style={{ width: 8 }} />
       </View>
 
-      {/* Calendar */}
       <Calendar
         year={year} month={month} prevMonth={prevMonth} nextMonth={nextMonth}
         selectedDay={selectedDay} onSelectDay={setSelectedDay}
@@ -495,7 +521,6 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
         loading={loading} errorMsg={errorMsg} reload={load}
       />
 
-      {/* Day list */}
       <DayList
         selectedDay={selectedDay}
         dayVisits={byDate.get(selectedDay) ?? []}
@@ -512,7 +537,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
         weekEnd={weekRange.end}
       />
 
-      {/* Status popup */}
+      {/* Toast overlay (used for save success, errors, and sending weekly) */}
       {sendStatus !== 'idle' && (
         <View style={styles.statusOverlay} pointerEvents="none">
           <View style={[
@@ -521,9 +546,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
             sendStatus === 'success' ? styles.statusGood : styles.statusBad
           ]}>
             {sendStatus === 'sending' ? <ActivityIndicator /> : null}
-            <Text style={styles.statusText}>
-              {sendMessage}
-            </Text>
+            <Text style={styles.statusText}>{sendMessage}</Text>
           </View>
         </View>
       )}
@@ -558,13 +581,20 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
               style={styles.modalInput}
             />
 
-            {/* Samples block */}
             <Text style={[styles.inputLabel, { marginTop: 8 }]}>
               Samples given {loadingSamples ? '(loading...)' : ''}
             </Text>
 
+            {!!sampleError && (
+              <Text style={{ color: '#b91c1c', marginBottom: 6, fontWeight: '800' }}>
+                {sampleError}
+              </Text>
+            )}
+
             {stock.length === 0 && !loadingSamples ? (
-              <Text style={{ color: '#6b7280', marginBottom: 6 }}>No samples available.</Text>
+              <Text style={{ color: '#6b7280', marginBottom: 6 }}>
+                No samples available{resolvedUsername ? ` for ${resolvedUsername}` : ''}.
+              </Text>
             ) : (
               <View style={{ gap: 8 }}>
                 {sampleLines.map((line, idx) => (
@@ -617,7 +647,15 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
               <Pressable onPress={() => setShowFinishModal(false)} style={[styles.btn, styles.btnGhost, { flex: 1 }]}>
                 <Text style={styles.btnGhostText}>Cancel</Text>
               </Pressable>
-              <Pressable onPress={endJourneyConfirm} style={[styles.btn, styles.btnPrimary, { flex: 1 }]}>
+              <Pressable
+                onPress={endJourneyConfirm}
+                disabled={!!sampleError}
+                style={[
+                  styles.btn,
+                  styles.btnPrimary,
+                  { flex: 1, opacity: sampleError ? 0.6 : 1 }
+                ]}
+              >
                 <Text style={styles.btnPrimaryText}>Save</Text>
               </Pressable>
             </View>
@@ -689,9 +727,7 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
 }
 
 /* ---- Smaller components ---- */
-function Calendar({
-  year, month, prevMonth, nextMonth, selectedDay, onSelectDay, byDate, loading, errorMsg, reload
-}: any) {
+function Calendar({ year, month, prevMonth, nextMonth, selectedDay, onSelectDay, byDate, loading, errorMsg, reload }: any) {
   const daysGrid = buildCalendarGrid(year, month)
   return (
     <View style={styles.calendarWrap}>
@@ -729,11 +765,7 @@ function Calendar({
                   <Pressable
                     key={key}
                     onPress={() => onSelectDay(key)}
-                    style={[
-                      styles.cell,
-                      !inMonth && styles.cellMuted,
-                      isSel && styles.cellSelected,
-                    ]}
+                    style={[styles.cell, !inMonth && styles.cellMuted, isSel && styles.cellSelected]}
                   >
                     <Text style={[styles.cellTxt, !inMonth && { color: '#94a3b8' }]}>{cell.day}</Text>
                     {dots > 0 && (
@@ -827,7 +859,7 @@ function DayList({
   )
 }
 
-/* ---------------- helpers ---------------- */
+/* helpers */
 function toIsoDate(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 }
@@ -864,16 +896,15 @@ function buildCalendarGrid(year: number, month0: number) {
 }
 
 function weekRangeFromISO(iso: string) {
-  // Monday-start week
   const [y,m,d] = iso.split('-').map(Number)
   const base = new Date(y, m-1, d)
-  let day = base.getDay(); if (day === 0) day = 7 // Sun=7
+  let day = base.getDay(); if (day === 0) day = 7
   const monday = new Date(base); monday.setDate(base.getDate() - (day - 1))
   const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6)
   return { start: toIsoDate(monday), end: toIsoDate(sunday) }
 }
 
-/* ---------------- presentational ---------------- */
+/* presentational */
 function StatusChip({ status }: { status: 'planned' | 'en_route' | 'done' | 'skipped' | string }) {
   const map: any = {
     planned: { bg: '#eef2ff', fg: '#1d4ed8', text: 'PLANNED' },
@@ -1017,7 +1048,6 @@ const styles = StyleSheet.create({
   pillTxtOn: { color: '#fff', fontWeight: '800' },
   pillTxtOff: { color: '#111827', fontWeight: '800' },
 
-  /* status popup */
   statusOverlay: {
     position: 'absolute', left: 0, right: 0, bottom: 24,
     alignItems: 'center', justifyContent: 'center',
