@@ -7,22 +7,7 @@ import {
 import { supabase } from '../europharm_app/lib/supabase'
 import bcrypt from 'bcryptjs'
 
-// If you don’t have a central AppUser type available here, uncomment this:
-/*
-type AppUser = {
-  id: string
-  username: string
-  password_hash: string | null
-  created_at: string | null
-  full_name?: string | null
-  name?: string | null
-  display_name?: string | null
-  first_name?: string | null
-  last_name?: string | null
-  email?: string | null
-  phone?: string | null
-}
-*/
+
 
 function deriveDisplayName(u: any, fallbackUsername: string): string {
   const tryFields = [
