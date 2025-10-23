@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   View, Text, TextInput, Pressable, StyleSheet, ScrollView,
-  useWindowDimensions, ActivityIndicator, Platform,
+  useWindowDimensions, ActivityIndicator, Platform, Alert,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 
@@ -14,15 +14,32 @@ type Brochure = {
   file_size?: string | null
   download_url?: string | null
   file_type?: string | null
+  file_data?: string | null
   created?: string | null
-  last_opened_at_arr?: string[] | null
-  last_opened_by_arr?: string[] | null
+  last_opened_at_arr?: string[] | null // ⬅️ keep only timestamps
 }
 
 type Props = {
   onBack?: () => void
   /** REQUIRED: pass rep’s display name from App (e.g., friendlyName) */
   currentRepName: string
+}
+
+/** Format a timestamp in Asia/Beirut regardless of server default */
+function formatBeirut(ts: string) {
+  try {
+    const d = new Date(ts) // works with ISO; if plain date/time, server should provide ISO
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Beirut',
+      year: 'numeric',
+      month: 'short',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(d)
+  } catch {
+    return ts
+  }
 }
 
 export default function BrochureReview({ onBack, currentRepName }: Props) {
@@ -44,8 +61,8 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
       const sel = await supabase
         .from('brochure')
         .select(`
-          id,title,description,category,file_size,download_url,file_type,created,
-          last_opened_at_arr,last_opened_by_arr
+          id,title,description,category,file_size,download_url,file_type,file_data,created,
+          last_opened_at_arr
         `)
         .order('created', { ascending: false })
 
@@ -61,9 +78,9 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
           file_size: b.file_size ?? '',
           download_url: b.download_url ?? '',
           file_type: b.file_type ?? '',
+          file_data: b.file_data ?? null,
           created: b.created ?? null,
           last_opened_at_arr: Array.isArray(b.last_opened_at_arr) ? b.last_opened_at_arr : [],
-          last_opened_by_arr: Array.isArray(b.last_opened_by_arr) ? b.last_opened_by_arr : [],
         }))
       )
     } catch (e: any) {
@@ -79,7 +96,7 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
   const fetchOne = async (brochureId: string): Promise<Brochure | null> => {
     const { data, error } = await supabase
       .from('brochure')
-      .select('id,title,description,category,file_size,download_url,file_type,created,last_opened_at_arr,last_opened_by_arr')
+      .select('id,title,description,category,file_size,download_url,file_type,file_data,created,last_opened_at_arr')
       .eq('id', brochureId)
       .maybeSingle()
     if (error) { console.warn('fetchOne failed:', error.message); return null }
@@ -93,42 +110,115 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
       file_size: b.file_size ?? '',
       download_url: b.download_url ?? '',
       file_type: b.file_type ?? '',
+      file_data: b.file_data ?? null,
       created: b.created ?? null,
       last_opened_at_arr: Array.isArray(b.last_opened_at_arr) ? b.last_opened_at_arr : [],
-      last_opened_by_arr: Array.isArray(b.last_opened_by_arr) ? b.last_opened_by_arr : [],
     }
   }
 
+  /** ---------- Log open/download via RPC (server stamps time) ---------- */
   const markBrochureOpened = async (brochureId: string) => {
     const name = (currentRepName || '').trim()
-    if (!name) { setErrorMsg('Missing rep name from App.'); return }
+    if (!name) { setErrorMsg('Missing rep name from App.'); return false }
 
     const { error } = await supabase.rpc('mark_brochure_opened', {
       p_id: String(brochureId),
       p_rep_name: name,
     })
-    if (error) { setErrorMsg(error.message); console.warn(error.message); return }
+    if (error) { setErrorMsg(error.message); console.warn(error.message); return false }
 
-    // Authoritative refresh: show DB-stamped arrays (Beirut time)
+    // Authoritative refresh (we’ll display time in Beirut regardless of server tz)
     const fresh = await fetchOne(brochureId)
     if (fresh) setRows((prev) => prev.map((r) => (r.id === brochureId ? fresh : r)))
+    return true
   }
 
-  const openLink = (url?: string | null) => {
+  /** ---------- Open / Download helpers ---------- */
+  const openInNewTabWeb = (url: string) => {
+    // @ts-ignore
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  const downloadWeb = (sourceUrl: string, suggestedName: string) => {
+    const a = document.createElement('a')
+    a.href = sourceUrl
+    a.download = suggestedName
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+
+  const openLink = (url: string) => {
     if (!url) return
     if (Platform.OS === 'web') {
-      // @ts-ignore
-      window.open(url, '_blank', 'noopener,noreferrer')
+      openInNewTabWeb(url)
     } else {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
       const Linking = require('react-native').Linking
-      Linking.openURL(url)
+      Linking.openURL(url).catch(() => {
+        Alert.alert('Unable to open file', 'Your device could not open this link.')
+      })
     }
   }
 
   const handleOpen = async (b: Brochure) => {
-    await markBrochureOpened(b.id)
-    openLink(b.download_url || '')
+    const ok = await markBrochureOpened(b.id)
+    if (!ok) return
+
+    if (b.download_url && b.download_url !== '#') {
+      openLink(b.download_url)
+      return
+    }
+
+    if (b.file_data) {
+      if (Platform.OS === 'web') {
+        openInNewTabWeb(b.file_data)
+      } else {
+        const Linking = require('react-native').Linking
+        Linking.openURL(b.file_data).catch(() => {
+          Alert.alert(
+            'Unable to open file',
+            'This brochure only has an embedded file. Opening data URLs may not be supported on this device.'
+          )
+        })
+      }
+      return
+    }
+
+    Alert.alert('No file', 'This brochure has no URL or file data.')
+  }
+
+  const handleDownload = async (b: Brochure) => {
+    const ok = await markBrochureOpened(b.id)
+    if (!ok) return
+
+    const safeTitle = (b.title || 'brochure').replace(/\s+/g, '_')
+    const ext = (b.file_type || 'pdf').toLowerCase()
+    const fileName = `${safeTitle}.${ext}`
+
+    if (Platform.OS === 'web') {
+      if (b.file_data) {
+        downloadWeb(b.file_data, fileName)
+        return
+      }
+      if (b.download_url && b.download_url !== '#') {
+        downloadWeb(b.download_url, fileName) // relies on server headers for forced download
+        return
+      }
+      Alert.alert('No file', 'This brochure has no URL or file data to download.')
+    } else {
+      if (b.download_url && b.download_url !== '#') {
+        const Linking = require('react-native').Linking
+        Linking.openURL(b.download_url).catch(() => {
+          Alert.alert('Unable to download', 'Your device could not open this link.')
+        })
+        return
+      }
+      Alert.alert(
+        'No file',
+        'This brochure has no direct URL to download on this platform. Saving base64 requires a native file-system integration.'
+      )
+    }
   }
 
   const categories = useMemo(() => {
@@ -149,7 +239,7 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
     })
   }, [rows, q, category])
 
-  const latest = (arr?: string[] | null) =>
+  const latestAt = (arr?: string[] | null) =>
     Array.isArray(arr) && arr.length > 0 ? arr[arr.length - 1] : null
 
   return (
@@ -194,8 +284,8 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
         <ScrollView contentContainerStyle={[styles.grid, { gap, paddingHorizontal: 16 }]}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap }}>
             {filtered.map((b) => {
-              const lastAt = latest(b.last_opened_at_arr)
-              const lastBy = latest(b.last_opened_by_arr)
+              const lastAtRaw = latestAt(b.last_opened_at_arr)
+              const lastAt = lastAtRaw ? formatBeirut(lastAtRaw) : null
               return (
                 <View key={b.id} style={[styles.card, { width: cardW }]}>
                   <View style={styles.cardHeader}>
@@ -214,21 +304,26 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
                     {!!b.created && (<Text style={styles.dateText}>{new Date(b.created).toLocaleDateString()}</Text>)}
                   </View>
 
-                  {(lastAt || lastBy) && (
+                  {!!lastAt && (
                     <View style={{ marginTop: 8 }}>
                       <Text style={{ fontSize: 11, color: '#64748b' }}>
-                        {lastAt ? `Last opened ${lastAt}` : 'Last opened —'}
-                        {lastBy ? ` by ${lastBy}` : ''}
+                        Last opened {lastAt} {/* ⬅️ No “by …” */}
                       </Text>
                     </View>
                   )}
 
                   <View style={styles.actions}>
                     <Pressable
-                      onPress={() => markBrochureOpened(b.id).then(() => { if (b.download_url) openLink(b.download_url) })}
+                      onPress={() => handleOpen(b)}
                       style={({ pressed }) => [styles.btnPrimarySolid, pressed && { transform: [{ translateY: 1 }], opacity: 0.95 }]}
                     >
                       <Text style={styles.btnPrimarySolidText}>Open</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => handleDownload(b)}
+                      style={({ pressed }) => [styles.btnSecondary, pressed && { transform: [{ translateY: 1 }], opacity: 0.95 }]}
+                    >
+                      <Text style={styles.btnSecondaryText}>Download</Text>
                     </Pressable>
                   </View>
                 </View>
@@ -289,7 +384,7 @@ const styles = StyleSheet.create({
   desc: { color: '#475569', marginTop: 6, fontSize: 13 },
 
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 },
-  metaChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#e5e7eb' },
+  metaChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999, backgroundColor: '#f1f59', borderWidth: 1, borderColor: '#e5e7eb' },
   metaText: { fontSize: 11, color: '#0f172a' },
   dateText: { marginLeft: 'auto', fontSize: 11, color: '#94a3b8' },
 
@@ -302,6 +397,14 @@ const styles = StyleSheet.create({
     boxShadow: '0 1px 0 rgba(0,0,0,0.06) inset',
   },
   btnPrimarySolidText: { color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.2 },
+
+  btnSecondary: {
+    flex: 1, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e5e7eb',
+    // @ts-ignore rn-web
+    cursor: 'pointer',
+  },
+  btnSecondaryText: { color: '#0f172a', fontWeight: '800', fontSize: 13, letterSpacing: 0.2 },
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 })
