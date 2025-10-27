@@ -8,29 +8,13 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
-  Modal,
-  TextInput,
   Alert,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
-import { EditProspectModal, ViewProspectModal, Prospect } from './ProspectModals'
+import { AddProspectModal, EditProspectModal, ViewProspectModal, Prospect } from './ProspectModals'
 
-type Props = {
-  onBack?: () => void
-}
-
+type Props = { onBack?: () => void }
 type FilterMode = 'all' | 'not_visited' | 'not_met'
-
-/** Lightweight form shape for new rows in `prospects`. */
-type NewProspect = {
-  name: string
-  code?: string | null
-  specialty?: string | null
-  area?: string | null
-  freq_required?: number | null
-  phone?: string | null
-  email?: string | null
-}
 
 export default function ProspectsList({ onBack }: Props) {
   const [items, setItems] = useState<Prospect[]>([])
@@ -39,23 +23,18 @@ export default function ProspectsList({ onBack }: Props) {
 
   const [viewId, setViewId] = useState<string | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
-
-  const [filter, setFilter] = useState<FilterMode>('all')
-
-  // Add Prospect modal state
   const [addOpen, setAddOpen] = useState(false)
+  const [filter, setFilter] = useState<FilterMode>('all')
 
   const load = async () => {
     setLoading(true)
     try {
-      // Expecting your RPC to return the columns in Prospect type
       const { data, error } = await supabase.rpc('get_prospects')
       if (error) throw error
       setItems((data ?? []) as Prospect[])
     } catch (e: any) {
       console.error('get_prospects error:', e?.message ?? e)
-      // Optional: surface an alert if desired
-      // Alert.alert('Load failed', e?.message ?? 'Could not load prospects.')
+      Alert.alert('Load failed', e?.message ?? 'Could not load prospects.')
     } finally {
       setLoading(false)
     }
@@ -76,7 +55,6 @@ export default function ProspectsList({ onBack }: Props) {
       ? (p?.freq_actual ?? 0) > 0
       : (p?.freq_actual ?? 0) >= (p?.freq_required ?? 0)
 
-  // Buckets we care about
   const notVisited = (p: Prospect) =>
     (p?.freq_required ?? 0) > 0 && (p?.freq_actual ?? 0) === 0
 
@@ -106,7 +84,6 @@ export default function ProspectsList({ onBack }: Props) {
         </Pressable>
         <Text style={styles.title}>Prospects</Text>
 
-        {/* Add Prospect button */}
         <Pressable onPress={() => setAddOpen(true)} style={styles.topBtn}>
           <Text style={styles.topBtnText}>+ Add Prospect</Text>
         </Pressable>
@@ -114,21 +91,9 @@ export default function ProspectsList({ onBack }: Props) {
 
       {/* Filter bar */}
       <View style={styles.filterBar}>
-        <Segment
-          label={`All (${counts.all})`}
-          active={filter === 'all'}
-          onPress={() => setFilter('all')}
-        />
-        <Segment
-          label={`Not Visited (${counts.nv})`}
-          active={filter === 'not_visited'}
-          onPress={() => setFilter('not_visited')}
-        />
-        <Segment
-          label={`Freq Not Met (${counts.nm})`}
-          active={filter === 'not_met'}
-          onPress={() => setFilter('not_met')}
-        />
+        <Segment label={`All (${counts.all})`} active={filter === 'all'} onPress={() => setFilter('all')} />
+        <Segment label={`Not Visited (${counts.nv})`} active={filter === 'not_visited'} onPress={() => setFilter('not_visited')} />
+        <Segment label={`Freq Not Met (${counts.nm})`} active={filter === 'not_met'} onPress={() => setFilter('not_met')} />
       </View>
 
       {loading ? (
@@ -145,9 +110,7 @@ export default function ProspectsList({ onBack }: Props) {
               ? 'All frequencies met — nice'
               : 'No prospects to show'}
           </Text>
-          <Text style={styles.emptySub}>
-            Pull to refresh or switch filters to explore other groups.
-          </Text>
+          <Text style={styles.emptySub}>Pull to refresh or switch filters to explore other groups.</Text>
         </View>
       ) : (
         <ScrollView
@@ -158,8 +121,6 @@ export default function ProspectsList({ onBack }: Props) {
             const met = freqMet(p)
             const isNotVisited = notVisited(p)
             const isNotMet = notMet(p)
-
-            // subtle accent on left edge based on bucket
             const accentStyle = isNotVisited
               ? styles.accentRed
               : isNotMet
@@ -174,9 +135,7 @@ export default function ProspectsList({ onBack }: Props) {
                   </View>
 
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.name} numberOfLines={1}>
-                      {p.name}
-                    </Text>
+                    <Text style={styles.name} numberOfLines={1}>{p.name}</Text>
 
                     <View style={styles.metaRow}>
                       <Text style={styles.metaLabel}>Code </Text>
@@ -203,22 +162,14 @@ export default function ProspectsList({ onBack }: Props) {
                 <View style={styles.actionsRow}>
                   <Pressable
                     onPress={() => setViewId(p.id)}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      styles.actionInfo,
-                      { transform: [{ scale: pressed ? 0.98 : 1 }] },
-                    ]}
+                    style={({ pressed }) => [styles.actionBtn, styles.actionInfo, { transform: [{ scale: pressed ? 0.98 : 1 }] }]}
                   >
                     <Text style={[styles.actionText, styles.actionInfoTxt]}>Check Info</Text>
                   </Pressable>
 
                   <Pressable
                     onPress={() => setEditId(p.id)}
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      styles.actionEdit,
-                      { transform: [{ scale: pressed ? 0.98 : 1 }] },
-                    ]}
+                    style={({ pressed }) => [styles.actionBtn, styles.actionEdit, { transform: [{ scale: pressed ? 0.98 : 1 }] }]}
                   >
                     <Text style={[styles.actionText, styles.actionEditTxt]}>Edit Info</Text>
                   </Pressable>
@@ -233,204 +184,20 @@ export default function ProspectsList({ onBack }: Props) {
 
       {/* Modals */}
       <ViewProspectModal open={!!viewId} id={viewId} onClose={() => setViewId(null)} />
-      <EditProspectModal
-        open={!!editId}
-        id={editId}
-        onClose={() => setEditId(null)}
-        onSaved={() => load()}
-      />
+      <EditProspectModal open={!!editId} id={editId} onClose={() => setEditId(null)} onSaved={() => load()} />
 
-      {/* Add Prospect Modal */}
-      {addOpen && (
-        <AddProspectModal
-          open={addOpen}
-          onClose={() => setAddOpen(false)}
-          onSaved={() => {
-            setAddOpen(false)
-            load()
-          }}
-        />
-      )}
+      <AddProspectModal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onSaved={() => {
+          setAddOpen(false)
+          load()
+        }}
+      />
     </View>
   )
 }
 
-/* --- Add Prospect Modal (inline to keep it self-contained) --- */
-function AddProspectModal({
-  open,
-  onClose,
-  onSaved,
-}: {
-  open: boolean
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [form, setForm] = useState<NewProspect>({
-    name: '',
-    code: '',
-    specialty: '',
-    area: '',
-    freq_required: 1,
-    phone: '',
-    email: '',
-  })
-  const [saving, setSaving] = useState(false)
-
-  const set = <K extends keyof NewProspect>(k: K, v: NewProspect[K]) =>
-    setForm((f) => ({ ...f, [k]: v }))
-
-  const save = async () => {
-    const name = (form.name ?? '').trim()
-    const freq = Number(form.freq_required ?? 0)
-
-    if (!name) {
-      Alert.alert('Missing info', 'Name is required.')
-      return
-    }
-    if (!Number.isFinite(freq) || freq < 0) {
-      Alert.alert('Invalid frequency', 'Required frequency must be a whole number ≥ 0.')
-      return
-    }
-
-    try {
-      setSaving(true)
-
-      // Build insert row for `public.prospects`.
-      const row: any = {
-        name,
-        code: (form.code ?? '') || null,
-        specialty: (form.specialty ?? '') || null,
-        area: (form.area ?? '') || null,
-        freq_required: freq,
-        phone: (form.phone ?? '') || null,
-        email: (form.email ?? '') || null,
-      }
-
-      const { data, error } = await supabase
-        .from('prospects')
-        .insert([row])
-        .select()
-        .single()
-
-      if (error) throw error
-      if (!data) throw new Error('Insert returned no row.')
-
-      Alert.alert('Saved', 'New prospect added.')
-      onSaved()
-    } catch (e: any) {
-      console.error('insert prospects error:', e)
-      Alert.alert('Save failed', e?.message ?? 'Could not add prospect.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (!open) return null
-
-  return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
-        <View style={styles.modal}>
-          <Text style={styles.modalTitle}>Add Prospect</Text>
-          <Text style={styles.modalSub}>Fill in the client details below.</Text>
-
-          <Text style={styles.inputLabel}>Name*</Text>
-          <TextInput
-            value={form.name ?? ''}
-            onChangeText={(v) => set('name', v)}
-            placeholder="Dr. Jane Doe"
-            placeholderTextColor="#9aa0a6"
-            style={styles.input}
-          />
-
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Code</Text>
-              <TextInput
-                value={form.code ?? ''}
-                onChangeText={(v) => set('code', v)}
-                placeholder="PR-1234"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Specialty</Text>
-              <TextInput
-                value={form.specialty ?? ''}
-                onChangeText={(v) => set('specialty', v)}
-                placeholder="Cardiology"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-              />
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Area</Text>
-              <TextInput
-                value={form.area ?? ''}
-                onChangeText={(v) => set('area', v)}
-                placeholder="Beirut"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-              />
-            </View>
-            <View style={{ width: 140 }}>
-              <Text style={styles.inputLabel}>Required Freq</Text>
-              <TextInput
-                value={String(form.freq_required ?? '')}
-                onChangeText={(v) => set('freq_required', Number(v.replace(/[^\d]/g, '')) || 0)}
-                keyboardType="numeric"
-                placeholder="e.g., 2"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-              />
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: 10 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Phone</Text>
-              <TextInput
-                value={form.phone ?? ''}
-                onChangeText={(v) => set('phone', v)}
-                placeholder="+961 71 234 567"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-                keyboardType="phone-pad"
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Email</Text>
-              <TextInput
-                value={form.email ?? ''}
-                onChangeText={(v) => set('email', v)}
-                placeholder="doctor@example.com"
-                placeholderTextColor="#9aa0a6"
-                style={styles.input}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
-            </View>
-          </View>
-
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-            <Pressable onPress={onClose} style={[styles.btn, styles.btnGhost, { flex: 1 }]}>
-              <Text style={styles.btnGhostText}>Cancel</Text>
-            </Pressable>
-            <Pressable onPress={save} disabled={saving} style={[styles.btn, styles.btnPrimary, { flex: 1 }]}>
-              {saving ? <ActivityIndicator /> : <Text style={styles.btnPrimaryText}>Save</Text>}
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  )
-}
-
-/* --- Small components --- */
 function Segment({
   label,
   active,
@@ -488,7 +255,6 @@ const styles = StyleSheet.create({
   },
   topBtnText: { color: '#0e7490', fontWeight: '800', fontSize: 12 },
 
-  /* Filter bar */
   filterBar: {
     paddingHorizontal: 16,
     paddingTop: 10,
@@ -511,7 +277,6 @@ const styles = StyleSheet.create({
 
   list: { paddingHorizontal: 16, paddingVertical: 8 },
 
-  /* Card */
   card: {
     backgroundColor: '#fff',
     borderRadius: 16,
@@ -523,7 +288,6 @@ const styles = StyleSheet.create({
     boxShadow: '0 8px 20px rgba(0,0,0,0.06)',
     position: 'relative',
   },
-  // subtle 4px accent on the left
   accentNeutral: { borderLeftWidth: 4, borderLeftColor: '#e5e7eb' },
   accentRed: { borderLeftWidth: 4, borderLeftColor: '#ef4444' },
   accentAmber: { borderLeftWidth: 4, borderLeftColor: '#f59e0b' },
@@ -568,63 +332,8 @@ const styles = StyleSheet.create({
   actionEdit: { backgroundColor: '#ecfeff', borderColor: '#a5f3fc' },
   actionEditTxt: { color: '#0e7490' },
 
-  /* Empty state */
-  emptyWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 },
   emptyEmoji: { fontSize: 42, marginBottom: 8 },
   emptyTitle: { fontSize: 16, fontWeight: '900', color: '#0f172a', textAlign: 'center' },
   emptySub: { marginTop: 6, fontSize: 12, color: '#64748b', textAlign: 'center' },
-
-  /* Modal styling (shared with AddProspectModal) */
-  modalOverlay: {
-    position: 'absolute',
-    top: 0, right: 0, bottom: 0, left: 0,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  modal: {
-    width: '100%',
-    maxWidth: 560,
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: '#edf0f5',
-    // @ts-ignore rn-web
-    boxShadow: '0 16px 40px rgba(0,0,0,0.18)',
-  },
-  modalTitle: { fontSize: 18, fontWeight: '800', color: '#0f172a' },
-  modalSub: { fontSize: 12, color: '#6b7280' },
-
-  inputLabel: { fontSize: 12, color: '#6b7280', marginBottom: 4, fontWeight: '700', marginTop: 4 },
-  input: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    paddingHorizontal: 12,
-    backgroundColor: '#f9fafb',
-    color: '#0f172a',
-  },
-
-  btn: {
-    height: 44,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#f8fafc',
-  },
-  btnPrimary: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
-  btnPrimaryText: { color: 'white', fontWeight: '800' },
-  btnGhost: { backgroundColor: '#fff' },
-  btnGhostText: { color: '#111827', fontWeight: '800' },
 })

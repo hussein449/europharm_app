@@ -21,17 +21,16 @@ type Product = {
   code?: string | null
 }
 
-/** Unified movement row coming from sample_actions. */
+/** Unified movement row sourced from sample_requests (no item_id). */
 type SampleMovement = {
   id: string
-  item_id?: string | null
-  product_name: string       // sample_actions.item_name
-  actor: string              // sample_actions.requested_by
+  product_name: string
+  actor: string
   unit_type: 'case' | 'box' | 'piece'
   quantity: number
   status: 'pending' | 'approved' | 'declined' | 'canceled' | null
-  kind: 'request' | 'return' // sample_actions.action
-  ts: string                 // sample_actions.requested_at
+  kind: 'request' | 'return'          // from `action` column; if you don't have it, we'll treat all as 'request'
+  ts: string
 }
 
 type Props = { onBack?: () => void }
@@ -124,7 +123,7 @@ export default function ProductsReview({ onBack }: Props) {
       )
     : items
 
-  /* ---------- Request flow (INSERT into sample_actions) ---------- */
+  /* ---------- Request flow (INSERT into sample_requests) ---------- */
   const openRequest = (p: Product) => {
     if ((p.stock ?? 0) <= 0) {
       Alert.alert('No available stock', 'This product has no stock available.')
@@ -152,33 +151,28 @@ export default function ProductsReview({ onBack }: Props) {
 
     try {
       setRequestModal((x) => ({ ...x, saving: true }))
-
-      // Write to unified table
-      const { error } = await supabase.from('sample_actions').insert([
+      // Columns used here: requested_by, unit_type, quantity, status, requested_at (default), item_name, action (if you have it)
+      const { error } = await supabase.from('sample_requests').insert([
         {
           requested_by: m.name.trim(),
-          action: 'request',
-          quantity: qtyNum,
-          item_name: m.product.name,
           unit_type: m.type,
-          status: 'pending', // workflow state
-          // requested_at auto now()
-        },
+          quantity: qtyNum,
+          status: 'pending',
+          item_name: m.product.name,   // <-- use name instead of item_id
+          action: 'request',           // remove if your table does not have this column
+        } as any,
       ])
-
       if (error) throw error
 
       Alert.alert('Request recorded', 'Saved as pending.')
       setRequestModal({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
-      // If you want to immediately reflect stock, add a stock-decrement trigger or call loadProducts()
-      // await loadProducts()
     } catch (e: any) {
       Alert.alert('Action failed', e?.message ?? 'Unknown error')
       setRequestModal((x) => ({ ...x, saving: false }))
     }
   }
 
-  /* ---------- Return flow (INSERT into sample_actions) ---------- */
+  /* ---------- Return flow (INSERT into sample_requests) ---------- */
   const openReturn = (p: Product) => {
     setReturnModal({ open: true, product: p, name: '', type: 'box', qty: '', saving: false })
   }
@@ -198,52 +192,52 @@ export default function ProductsReview({ onBack }: Props) {
 
     try {
       setReturnModal((x) => ({ ...x, saving: true }))
-
-      // Returns go in the same table, action='return'
-      const { error } = await supabase.from('sample_actions').insert([
+      // Store returns with status='approved' by default and action='return' (if column exists)
+      const { error } = await supabase.from('sample_requests').insert([
         {
           requested_by: m.name.trim(),
-          action: 'return',
-          quantity: qtyNum,
-          item_name: m.product.name,
           unit_type: m.type,
-          status: 'approved', // or NULL; using approved makes it obvious it's processed
-        },
+          quantity: qtyNum,
+          status: 'approved',
+          item_name: m.product.name,  // <-- use name
+          action: 'return',           // remove if your table does not have this column
+        } as any,
       ])
       if (error) throw error
 
       Alert.alert('Return recorded', 'Thank you.')
       setReturnModal({ open: false, product: null, name: '', type: 'box', qty: '', saving: false })
-      // If you want to immediately reflect stock, add a stock-increment trigger or call loadProducts()
-      // await loadProducts()
     } catch (e: any) {
       Alert.alert('Action failed', e?.message ?? 'Unknown error')
       setReturnModal((x) => ({ ...x, saving: false }))
     }
   }
 
-  /* ---------- Movements list (requests + returns) ---------- */
+  /* ---------- Movements list (requests + returns) from sample_requests ---------- */
   const openMovements = async () => {
     setListModal({ open: true, loading: true, rows: [], err: null, typeFilter: 'all', statusFilter: 'all' })
     try {
-      // Read directly from unified table
+      // If your table doesn't have `action`, drop it and everything will be considered a request.
       const { data, error } = await supabase
-        .from('sample_actions')
+        .from('sample_requests')
         .select('id, requested_by, action, quantity, requested_at, item_name, unit_type, status')
         .order('requested_at', { ascending: false })
       if (error) throw error
 
-      const rows: SampleMovement[] = (data ?? []).map((r: any) => ({
-        id: String(r.id),
-        item_id: null,
-        product_name: String(r.item_name ?? '—'),
-        actor: String(r.requested_by ?? '—'),
-        unit_type: r.unit_type,
-        quantity: Number(r.quantity ?? 0),
-        status: r.status ?? null,
-        kind: (r.action ?? 'request') as 'request' | 'return',
-        ts: r.requested_at ?? new Date().toISOString(),
-      }))
+      const rows: SampleMovement[] = (data ?? []).map((r: any) => {
+        const kind: 'request' | 'return' = (r.action ?? 'request') === 'return' ? 'return' : 'request'
+        return {
+          id: String(r.id),
+          product_name: String(r.item_name ?? '—'),
+          actor: String(r.requested_by ?? '—'),
+          unit_type: r.unit_type,
+          quantity: Number(r.quantity ?? 0),
+          // Returns default APPROVED if status missing; Requests default PENDING
+          status: kind === 'return' ? (r.status ?? 'approved') : (r.status ?? 'pending'),
+          kind,
+          ts: r.requested_at ?? new Date().toISOString(),
+        }
+      })
 
       setListModal((m) => ({ ...m, loading: false, rows }))
     } catch (e: any) {
@@ -257,7 +251,7 @@ export default function ProductsReview({ onBack }: Props) {
       r = r.filter(x => x.kind === listModal.typeFilter)
     }
     if (listModal.statusFilter !== 'all') {
-      r = r.filter(x => (x.kind === 'request' ? (x.status ?? 'pending') === listModal.statusFilter : true))
+      r = r.filter(x => (x.status ?? (x.kind === 'return' ? 'approved' : 'pending')) === listModal.statusFilter)
     }
     return r
   }, [listModal.rows, listModal.typeFilter, listModal.statusFilter])
@@ -477,7 +471,7 @@ export default function ProductsReview({ onBack }: Props) {
                 })}
               </View>
 
-              {/* Status filter (requests only) */}
+              {/* Status filter */}
               <View style={styles.filterRow}>
                 {(['all', 'pending', 'approved', 'declined', 'canceled'] as const).map((f) => {
                   const active = listModal.statusFilter === f
@@ -519,9 +513,17 @@ export default function ProductsReview({ onBack }: Props) {
                       </Text>
                       <Text style={styles.reqTime}>{new Date(r.ts).toLocaleString()}</Text>
                     </View>
-                    {r.kind === 'request'
-                      ? <RequestStatusChip status={(r.status ?? 'pending') as any} />
-                      : <View style={{ width: 74, alignItems: 'flex-end' }}><Text style={{ color: '#475569', fontSize: 12, fontWeight: '800' }}>—</Text></View>}
+
+                    {/* Always show a status chip; returns default to APPROVED if missing */}
+                    <View style={{ width: 110, alignItems: 'flex-end' }}>
+                      <RequestStatusChip
+                        status={
+                          (r.kind === 'return'
+                            ? (r.status ?? 'approved')
+                            : (r.status ?? 'pending')) as 'pending' | 'approved' | 'declined' | 'canceled'
+                        }
+                      />
+                    </View>
                   </View>
                 ))}
               </ScrollView>
