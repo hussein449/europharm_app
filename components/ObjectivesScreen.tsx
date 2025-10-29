@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   View, Text, StyleSheet, Pressable, ActivityIndicator,
-  ScrollView, TextInput, Alert
+  ScrollView, TextInput, Alert, useWindowDimensions
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 
@@ -22,7 +22,6 @@ type Props = {
   currentUser?: { id: string; username: string }
 }
 
-// flip this if you also want to show unassigned objectives
 const SHOW_UNASSIGNED = true
 
 export default function ObjectivesScreen({ onBack, currentUser }: Props) {
@@ -32,14 +31,12 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
   const [q, setQ] = useState('')
   const [tab, setTab] = useState<'all' | ObjStatus>('all')
 
-  // detail modal
   const [selected, setSelected] = useState<Objective | null>(null)
 
-  // add modal
   const [showAdd, setShowAdd] = useState(false)
   const [newClient, setNewClient] = useState('')
   const [newObjective, setNewObjective] = useState('')
-  const [newDue, setNewDue] = useState('') // YYYY-MM-DD optional
+  const [newDue, setNewDue] = useState('')
 
   const username = (currentUser?.username ?? '').trim() || null
 
@@ -50,7 +47,6 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
         .from('objectives')
         .select('id, client_name, objective, status, assigned_date, due_date, updated_by')
 
-      // 🔒 scope to this user (optionally include unassigned)
       if (username) {
         if (SHOW_UNASSIGNED) {
           query = query.or(`updated_by.eq.${username},updated_by.is.null`)
@@ -58,7 +54,6 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
           query = query.eq('updated_by', username)
         }
       } else {
-        // no username—show only unassigned
         query = query.is('updated_by', null)
       }
 
@@ -92,20 +87,19 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
     return rows.filter(r => {
       const matchesText =
         !t ||
-        r.client_name.toLowerCase().includes(t) ||
-        r.objective.toLowerCase().includes(t)
+        (r.client_name ?? '').toLowerCase().includes(t) ||
+        (r.objective ?? '').toLowerCase().includes(t)
       const matchesTab = tab === 'all' || r.status === tab
       return matchesText && matchesTab
     })
   }, [rows, q, tab])
 
-  // Only move forward (no revert to pending)
   const setStatus = async (id: string, status: Extract<ObjStatus, 'completed' | 'canceled'>) => {
     try {
       setRows(prev => prev.map(r => r.id === id ? { ...r, status, updated_by: username ?? r.updated_by } : r))
       const { error } = await supabase
         .from('objectives')
-        .update({ status, updated_by: username }) // keep ownership with this user
+        .update({ status, updated_by: username })
         .eq('id', id)
       if (error) throw error
     } catch (e: any) {
@@ -143,7 +137,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
           objective: obj,
           status: 'pending',
           due_date: due || null,
-          updated_by: username, // tag with current user so it shows up for them
+          updated_by: username,
         })
         .select('id, client_name, objective, status, assigned_date, due_date, updated_by')
         .single()
@@ -169,6 +163,18 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
     }
   }
 
+  // ---------- Responsive layout ----------
+  const { width } = useWindowDimensions()
+  const isTwoCol = width >= 820 && width < 1180
+  const isThreeCol = width >= 1180
+  const columns = isThreeCol ? 3 : isTwoCol ? 2 : 1
+  const pagePad = 16
+  const gap = 12
+  const cardWidth = Math.min(
+    520,
+    Math.floor((width - pagePad * 2 - gap * (columns - 1)) / columns)
+  )
+
   return (
     <View style={styles.screen}>
       {/* Top bar */}
@@ -180,7 +186,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
         </Pressable>
       </View>
 
-      {/* Controls */}
+      {/* Controls (STACKED to avoid overlap) */}
       <View style={styles.controls}>
         <TextInput
           value={q}
@@ -190,7 +196,13 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
           style={styles.search}
           clearButtonMode="while-editing"
         />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 10 }}>
+
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.pillsRow}
+          style={{ marginTop: 10 }}
+        >
           {(['all','pending','completed','canceled'] as const).map(s => (
             <Pressable
               key={s}
@@ -224,24 +236,34 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
           <Text style={{ color: '#6b7280', marginTop: 6 }}>Adjust filters or add data.</Text>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 28 }}>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+        <ScrollView contentContainerStyle={{ padding: pagePad, paddingBottom: 28 }}>
+          {/* CENTERED GRID */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap, justifyContent: 'center' }}>
             {filtered.map(o => (
-              <Pressable key={o.id} onPress={() => setSelected(o)} style={styles.card}>
+              <Pressable
+                key={o.id}
+                onPress={() => setSelected(o)}
+                style={[
+                  styles.card,
+                  { width: cardWidth }
+                ]}
+              >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.client} numberOfLines={1}>{o.client_name}</Text>
                   <Text style={styles.objective} numberOfLines={3}>{o.objective}</Text>
 
                   <View style={styles.metaRow}>
-                    {o.assigned_date && (
+                    {o.assigned_date ? (
                       <View style={styles.metaPill}><Text style={styles.metaTxt}>Assigned: {o.assigned_date}</Text></View>
-                    )}
-                    {o.due_date && (
-                      <View style={styles.metaPill}><Text style={styles.metaTxt}>Due: {o.due_date}</Text></View>
-                    )}
-                    {o.updated_by && (
+                    ) : null}
+                    {o.due_date ? (
+                      <View style={[styles.metaPill, { backgroundColor: '#eef2ff' }]}>
+                        <Text style={[styles.metaTxt, { color: '#1d4ed8' }]}>Due: {o.due_date}</Text>
+                      </View>
+                    ) : null}
+                    {o.updated_by ? (
                       <View style={styles.metaPill}><Text style={styles.metaTxt}>By {o.updated_by}</Text></View>
-                    )}
+                    ) : null}
                   </View>
                 </View>
 
@@ -268,18 +290,16 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
       {/* Detail Modal */}
       {selected && (
         <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
-            {/* header */}
+          <View style={[styles.modal, { maxWidth: Math.min(680, width - 32) }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={styles.modalTitle} numberOfLines={2}>{selected.client_name}</Text>
               <View style={{ flex: 1 }} />
               <StatusChip status={selected.status} />
-              <Pressable onPress={() => setSelected(null)} style={[styles.closeBtn, { marginLeft: 8 }]}>
+              <Pressable onPress={() => setSelected(null)} style={[styles.closeBtn, { marginLeft: 8 }]} accessibilityLabel="Close">
                 <Text style={styles.closeTxt}>✕</Text>
               </Pressable>
             </View>
 
-            {/* meta chips */}
             <View style={styles.metaRow}>
               {selected.assigned_date && (
                 <View style={styles.metaPill}><Text style={styles.metaPillTxt}>Assigned: {selected.assigned_date}</Text></View>
@@ -295,15 +315,13 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
               <View style={styles.metaPill}><Text style={styles.metaPillTxt}>ID: {selected.id.slice(0,8)}…</Text></View>
             </View>
 
-            {/* objective text */}
             <View style={styles.notesBox}>
               <Text style={styles.notesLabel}>Objective</Text>
-              <ScrollView style={{ maxHeight: 240 }}>
+              <ScrollView style={{ maxHeight: 320 }}>
                 <Text style={styles.notesFull}>{selected.objective || '—'}</Text>
               </ScrollView>
             </View>
 
-            {/* footer */}
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <Pressable onPress={() => setSelected(null)} style={[styles.btn, styles.btnGhost, { flex: 1 }]}>
                 <Text style={styles.btnGhostText}>Close</Text>
@@ -316,7 +334,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
       {/* Add Objective Modal */}
       {showAdd && (
         <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
+          <View style={[styles.modal, { maxWidth: Math.min(640, width - 32) }]}>
             <Text style={styles.modalTitle}>Add Objective</Text>
             <Text style={styles.modalSub}>New objectives start as <Text style={{ fontWeight: '900' }}>PENDING</Text>.</Text>
 
@@ -336,7 +354,7 @@ export default function ObjectivesScreen({ onBack, currentUser }: Props) {
               placeholder="Describe the objective…"
               placeholderTextColor="#9aa0a6"
               multiline
-              style={[styles.textInput, { minHeight: 80, textAlignVertical: 'top' }]}
+              style={[styles.textInput, { minHeight: 96, textAlignVertical: 'top' }]}
             />
 
             <Text style={styles.inputLabel}>Due date (YYYY-MM-DD)</Text>
@@ -416,16 +434,21 @@ const styles = StyleSheet.create({
   addTopTxt: { color: '#fff', fontWeight: '800' },
 
   controls: {
-    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8,
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 10,
     backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#edf0f5',
+    // @ts-ignore rn-web
+    boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
   },
   search: {
     height: 42, backgroundColor: '#f2f4f7', borderRadius: 12,
     borderWidth: 1, borderColor: '#e5e7eb', paddingHorizontal: 12, color: '#111827',
   },
+  pillsRow: {
+    gap: 8,
+    paddingRight: 8,
+  },
 
   card: {
-    width: '100%', maxWidth: 520,
     backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#edf0f5',
     padding: 14, gap: 10,
     // @ts-ignore rn-web
@@ -467,14 +490,13 @@ const styles = StyleSheet.create({
   pillTxtOn: { color: '#fff',     fontWeight: '800' },
   pillTxtOff:{ color: '#111827',  fontWeight: '800' },
 
-  /* modal */
   modalOverlay: {
     position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.35)',
     alignItems: 'center', justifyContent: 'center', padding: 16,
   },
   modal: {
-    width: '100%', maxWidth: 560, backgroundColor: '#fff', borderRadius: 16,
-    padding: 16, gap: 12,
+    width: '100%', backgroundColor: '#fff', borderRadius: 16,
+    padding: 16, gap: 12, borderWidth: 1, borderColor: '#eef0f5',
     // @ts-ignore rn-web
     boxShadow: '0 18px 46px rgba(0,0,0,0.2)',
   },

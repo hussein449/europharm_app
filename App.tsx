@@ -11,7 +11,7 @@ import VisitsSchedule from './components/VisitsSchedule'
 import SummaryScreen from './components/SummaryScreen'
 import ObjectivesScreen from './components/ObjectivesScreen'
 import AchievementsReview from './components/AchievementsReview'
-import EndJourneyReport from './components/EndJourneyReport' // <-- NEW
+import EndJourneyReport from './components/EndJourneyReport'
 
 export type AppUser = { id: string; username: string }
 
@@ -24,7 +24,7 @@ type Screen =
   | 'summary'
   | 'objectives'
   | 'achievements'
-  | 'end_report' // <-- NEW
+  | 'end_report'
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null)
@@ -34,7 +34,7 @@ export default function App() {
     return (
       <>
         <StatusBar style="dark" />
-        <LoginScreen onSuccess={(u) => setUser(u)} />
+        <LoginScreen onSuccess={(u: AppUser) => setUser(u)} />
       </>
     )
   }
@@ -49,35 +49,26 @@ export default function App() {
             if (key === 'prospects') setScreen('prospects')
             if (key === 'products') setScreen('products')
             if (key === 'brochures') setScreen('brochures')
-            if (key === 'opportunities') setScreen('visits')   // Planned Opportunities → Visits
+            if (key === 'opportunities') setScreen('visits')
             if (key === 'summary') setScreen('summary')
             if (key === 'assess_objectives') setScreen('objectives')
             if (key === 'achievements') setScreen('achievements')
-            if (key === 'end_journey') setScreen('end_report') // <-- map your tile key
+            if (key === 'end_journey') setScreen('end_report')
           }}
-          welcomeName={user?.username}
+          welcomeName={user.username}
         />
       )}
 
       {screen === 'summary' && (
-        <SummaryScreen
-          currentUser={user}
-          onBack={() => setScreen('home')}
-        />
+        <SummaryScreen currentUser={user} onBack={() => setScreen('home')} />
       )}
 
       {screen === 'objectives' && (
-        <ObjectivesScreen
-          currentUser={user}
-          onBack={() => setScreen('home')}
-        />
+        <ObjectivesScreen currentUser={user} onBack={() => setScreen('home')} />
       )}
 
       {screen === 'achievements' && (
-        <AchievementsReview
-          currentUser={user}
-          onBack={() => setScreen('home')}
-        />
+        <AchievementsReview currentUser={user} onBack={() => setScreen('home')} />
       )}
 
       {screen === 'prospects' && (
@@ -85,7 +76,11 @@ export default function App() {
       )}
 
       {screen === 'products' && (
-        <ProductsReview onBack={() => setScreen('home')} />
+        // ✅ pass the username so ProductsReview can filter movements immediately
+        <ProductsReview
+          onBack={() => setScreen('home')}
+          currentUserName={user.username}
+        />
       )}
 
       {screen === 'brochures' && (
@@ -93,17 +88,11 @@ export default function App() {
       )}
 
       {screen === 'visits' && (
-        <VisitsSchedule
-          currentUser={user}
-          onBack={() => setScreen('home')}
-        />
+        <VisitsSchedule currentUser={user} onBack={() => setScreen('home')} />
       )}
 
       {screen === 'end_report' && (
-        <EndJourneyReport
-          currentUser={user}          // <-- ✅ pass the logged-in user here
-          onBack={() => setScreen('home')}
-        />
+        <EndJourneyReport currentUser={user} onBack={() => setScreen('home')} />
       )}
     </>
   )

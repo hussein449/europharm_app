@@ -22,18 +22,25 @@ type VisitRow = {
   status: string | null
   note_type: 'SALES ORDER' | 'RFR' | 'COLLECTION' | string | null
   notes: string | null
-  samples_distributed: number | null
+  /** DB column is singular */
+  sample_distributed: number | null
 }
 
 type Props = {
   onBack?: () => void
-  /** Pass { id, username } from App so we can scope to that rep */
   currentUser?: { id: string; username: string }
 }
 
 /* --- helpers --- */
 function toISO(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+function isValidISO(dateStr: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return false
+  // ensure same components (avoid JS Date auto-fix like 2025-13-40 → 2026-02-09)
+  return toISO(d) === dateStr
 }
 function avatarEmojiFor(u: string) {
   const pool = ['🧭','🧪','📦','💊','🧴','📍','🚗','📋','🧾','📈']
@@ -49,9 +56,7 @@ function Pill({ label, active, onPress }: { label: string; active: boolean; onPr
   )
 }
 
-/**
- * Parse "Samples:" lines out of notes → { cleanNotes, items[], total }
- */
+/** Parse "Samples:" lines out of notes → { cleanNotes, items[], total } */
 function parseSamplesFromNotes(notesRaw: string | null) {
   const notes = (notesRaw ?? '').trim()
   if (!notes) return { cleanNotes: '', items: [] as { name: string; qty: number }[], total: 0 }
@@ -92,41 +97,24 @@ function parseSamplesFromNotes(notesRaw: string | null) {
 }
 
 export default function EndJourneyReport({ onBack, currentUser }: Props) {
-  // default range: current month
   const today = new Date()
   const startMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+
+  // editable inputs
   const [startDate, setStartDate] = useState(toISO(startMonth))
   const [endDate, setEndDate] = useState(toISO(today))
-  const [preset, setPreset] = useState<'month' | 'week'>('month')
+  const [preset, setPreset] = useState<'month' | 'week' | null>('month')
 
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [rows, setRows] = useState<VisitRow[]>([])
 
-  // expand/collapse per user (usually one user when scoped)
   const [openUser, setOpenUser] = useState<string | null>(null)
-
-  // username search (hidden when scoped)
-  const [search, setSearch] = useState('')
-
-  // visit details modal
+  const [search, setSearch] = useState('') // hidden in scoped view
   const [selected, setSelected] = useState<VisitRow | null>(null)
 
   const username = (currentUser?.username ?? '').trim() || null
-
-  const applyPreset = (p: 'month' | 'week') => {
-    setPreset(p)
-    if (p === 'month') {
-      const s = new Date(today.getFullYear(), today.getMonth(), 1)
-      setStartDate(toISO(s))
-      setEndDate(toISO(today))
-    } else {
-      const day = today.getDay() === 0 ? 7 : today.getDay() // Mon=1..Sun=7
-      const monday = new Date(today); monday.setDate(today.getDate() - (day - 1))
-      setStartDate(toISO(monday))
-      setEndDate(toISO(today))
-    }
-  }
+  const showSearch = false
 
   const normalize = (data: any[]): VisitRow[] =>
     (data ?? []).map((r: any) => ({
@@ -137,25 +125,25 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
       status: r.status ?? null,
       note_type: r.note_type ?? null,
       notes: r.notes ?? null,
-      samples_distributed: Number.isFinite(r.samples_distributed) ? r.samples_distributed : (r.samples_distributed ?? 0),
+      sample_distributed: Number.isFinite(r.sample_distributed) ? r.sample_distributed : (r.sample_distributed ?? 0),
     }))
 
-  const load = async () => {
+  const load = async (range?: { start: string; end: string }) => {
+    const useStart = range?.start ?? startDate
+    const useEnd = range?.end ?? endDate
+
     setLoading(true)
     try {
       if (!username) {
-        // No username → don't leak anything
         setRows([])
-        setLoading(false)
         return
       }
 
-      // 1) normal: only this rep’s visits
       const base = supabase
         .from('visits')
-        .select('id, visit_date, client_name, visited_by, status, note_type, notes, samples_distributed')
-        .gte('visit_date', startDate)
-        .lte('visit_date', endDate)
+        .select('id, visit_date, client_name, visited_by, status, note_type, notes, sample_distributed')
+        .gte('visit_date', useStart)
+        .lte('visit_date', useEnd)
         .order('visit_date', { ascending: false })
 
       const { data: mine, error: errMine } = await base.eq('visited_by', username)
@@ -166,7 +154,6 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
         return
       }
 
-      // 2) legacy fallback: include rows where visited_by IS NULL (older app versions didn’t set it)
       const { data: legacy, error: errLegacy } = await base.is('visited_by', null)
       if (errLegacy) throw errLegacy
 
@@ -179,7 +166,55 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
     }
   }
 
-  useEffect(() => { load() }, [startDate, endDate, username])
+  // Initial load when user is known
+  useEffect(() => {
+    if (username) load({ start: startDate, end: endDate })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username])
+
+  const applyPreset = async (p: 'month' | 'week') => {
+    setPreset(p)
+    if (p === 'month') {
+      const s = new Date(today.getFullYear(), today.getMonth(), 1)
+      const start = toISO(s)
+      const end = toISO(today)
+      setStartDate(start)
+      setEndDate(end)
+      await load({ start, end })
+    } else {
+      const day = today.getDay() === 0 ? 7 : today.getDay() // Mon=1..Sun=7
+      const monday = new Date(today); monday.setDate(today.getDate() - (day - 1))
+      const start = toISO(monday)
+      const end = toISO(today)
+      setStartDate(start)
+      setEndDate(end)
+      await load({ start, end })
+    }
+  }
+
+  const applyDates = async () => {
+    const s = startDate.trim()
+    const e = endDate.trim()
+
+    if (!isValidISO(s) || !isValidISO(e)) {
+      Alert.alert('Invalid date', 'Please use YYYY-MM-DD for both start and end.')
+      return
+    }
+
+    let start = s
+    let end = e
+    if (new Date(start) > new Date(end)) {
+      // swap to be helpful
+      const tmp = start
+      start = end
+      end = tmp
+      setStartDate(start)
+      setEndDate(end)
+    }
+
+    setPreset(null) // custom range
+    await load({ start, end })
+  }
 
   const onRefresh = async () => {
     setRefreshing(true)
@@ -198,7 +233,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
     return m
   }, [rows])
 
-  // totals per user (computed samples: DB field OR parsed)
+  // totals per user (DB field OR parsed)
   const totals = useMemo(() => {
     const obj: Record<string, { visits: number; samples: number }> = {}
     for (const [u, list] of byUser.entries()) {
@@ -206,7 +241,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
         visits: list.length,
         samples: list.reduce((sum, v) => {
           const parsed = parseSamplesFromNotes(v.notes)
-          const eff = (v.samples_distributed ?? 0) || parsed.total
+          const eff = (v.sample_distributed ?? 0) || parsed.total
           return sum + (eff || 0)
         }, 0),
       }
@@ -214,15 +249,13 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
     return obj
   }, [byUser])
 
-  // user list + filter by search (search hidden when scoped)
+  // visible user keys (search disabled in scoped view)
   const users = useMemo(() => {
     const all = Array.from(byUser.keys())
     const q = search.trim().toLowerCase()
     const filtered = q ? all.filter(u => (u ?? '').toLowerCase().includes(q)) : all
     return filtered.sort((a, b) => a.localeCompare(b))
   }, [byUser, search])
-
-  const showSearch = false // scoped view; keep search hidden
 
   return (
     <View style={styles.screen}>
@@ -242,20 +275,42 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
           <Pill label="This Week" active={preset === 'week'} onPress={() => applyPreset('week')} />
         </View>
 
-        {/* Date range read-only (driven by preset) */}
+        {/* Editable date range */}
         <View style={styles.datesRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.inputLabel}>Start (YYYY-MM-DD)</Text>
-            <TextInput value={startDate} editable={false} style={[styles.input, { opacity: 0.65 }]} />
+            <TextInput
+              value={startDate}
+              onChangeText={setStartDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#9aa0a6"
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.inputLabel}>End (YYYY-MM-DD)</Text>
-            <TextInput value={endDate} editable={false} style={[styles.input, { opacity: 0.65 }]} />
+            <TextInput
+              value={endDate}
+              onChangeText={setEndDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#9aa0a6"
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
           </View>
         </View>
 
-        {/* Search by username — hidden when scoped */}
-        {showSearch && (
+        <View style={{ marginTop: 10, flexDirection: 'row', gap: 10 }}>
+          <Pressable onPress={applyDates} style={[styles.btn, styles.btnPrimary, { flex: 1 }]}>
+            <Text style={styles.btnPrimaryText}>Apply</Text>
+          </Pressable>
+        </View>
+
+        {/* Optional search (kept hidden when scoped) */}
+        {false && showSearch && (
           <View style={{ marginTop: 10 }}>
             <Text style={styles.inputLabel}>Search by username</Text>
             <TextInput
@@ -278,7 +333,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyEmoji}>🗺️</Text>
           <Text style={styles.emptyTitle}>No journeys in the selected range</Text>
-          <Text style={styles.emptySub}>Try switching the preset.</Text>
+          <Text style={styles.emptySub}>Try changing the range or preset.</Text>
         </View>
       ) : (
         <ScrollView
@@ -317,7 +372,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
                   <View style={{ paddingHorizontal: 8, paddingBottom: 10 }}>
                     {byUser.get(u)!.map(v => {
                       const parsed = parseSamplesFromNotes(v.notes)
-                      const effectiveTotal = (v.samples_distributed ?? 0) || parsed.total
+                      const effectiveTotal = (v.sample_distributed ?? 0) || parsed.total
                       const hasSamples = effectiveTotal > 0
                       return (
                         <Pressable
@@ -360,7 +415,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
             <Text style={styles.modalTitle}>Visit Details</Text>
             {selected ? (() => {
               const parsed = parseSamplesFromNotes(selected.notes)
-              const effectiveTotal = (selected.samples_distributed ?? 0) || parsed.total
+              const effectiveTotal = (selected.sample_distributed ?? 0) || parsed.total
               return (
                 <View style={{ gap: 8 }}>
                   <DetailRow label="Client" value={selected.client_name || '—'} />
