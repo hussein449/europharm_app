@@ -5,7 +5,6 @@ import {
   Pressable,
   StyleSheet,
   ScrollView,
-  TextInput,
   useWindowDimensions,
 } from 'react-native'
 
@@ -28,15 +27,17 @@ export default function HomeScreen({ onSelect, welcomeName }: Props) {
 
   const items = useMemo<Item[]>(
     () => [
-      { key: 'prospects',        title: 'Prospects List',              subtitle: 'All clients',                              icon: '👥' },
-      { key: 'products',         title: 'Products Review',             subtitle: 'All products',                             icon: '📦' },
-      { key: 'opportunities',    title: 'Planned Opportunities',       subtitle: 'Visits & schedules,\nAgenda & routing',    icon: '📝' },
-      { key: 'summary',          title: 'Summary',                     subtitle: 'Actions over clients',                     icon: '📒' },
-      { key: 'end_journey',      title: 'End Journey Report',          subtitle: 'تقرير نهاية الرحلة',                      icon: '🛑' },
-      { key: 'daily_collection', title: 'Daily Collection',            subtitle: 'Payments today',                           icon: '💵' },
-      { key: 'assess_objectives',title:'Assess Prospects Objectives',  subtitle: 'Manage tasks',                             icon: '✅' },
-      { key: 'achievements',     title: 'Achievements Review',         subtitle: 'Attendance & KPIs',                        icon: '📈' },
-      { key: 'brochures',        title: 'Brochures Review',            subtitle: 'Browse docs',                              icon: '📚' },
+      { key: 'prospects',         title: 'Prospects List',              subtitle: 'All clients',                              icon: '👥' },
+      { key: 'products',          title: 'Products Review',             subtitle: 'All products',                             icon: '📦' },
+      { key: 'opportunities',     title: 'Planned Opportunities',       subtitle: 'Visits & schedules,\nAgenda & routing',    icon: '📝' },
+      { key: 'summary',           title: 'Summary',                     subtitle: 'Actions over clients',                     icon: '📒' },
+      { key: 'end_journey',       title: 'End Journey Report',          subtitle: 'تقرير نهاية الرحلة',                      icon: '🛑' },
+      { key: 'daily_collection',  title: 'Daily Collection',            subtitle: 'Payments today',                           icon: '💵' },
+      { key: 'assess_objectives', title: 'Assess Prospects Objectives', subtitle: 'Manage tasks',                             icon: '✅' },
+      { key: 'achievements',      title: 'Achievements Review',         subtitle: 'Attendance & KPIs',                        icon: '📈' },
+      { key: 'brochures',         title: 'Brochures Review',            subtitle: 'Browse docs',                              icon: '📚' },
+      // New section with SAME design as others
+      { key: 'odometer_review',   title: 'Odometer Review',             subtitle: 'Track distance & routes',                  icon: '🚗' },
     ],
     []
   )
@@ -136,7 +137,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
-  /* grid + cards (unchanged) */
+  /* grid + cards (same design for all) */
   grid: { paddingTop: 16, paddingBottom: 8 },
   card: {
     backgroundColor: '#ffffff',

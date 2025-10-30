@@ -12,7 +12,7 @@ import SummaryScreen from './components/SummaryScreen'
 import ObjectivesScreen from './components/ObjectivesScreen'
 import AchievementsReview from './components/AchievementsReview'
 import EndJourneyReport from './components/EndJourneyReport'
-
+import OdometerReview from './components/OdometerReview'
 export type AppUser = { id: string; username: string }
 
 type Screen =
@@ -25,6 +25,7 @@ type Screen =
   | 'objectives'
   | 'achievements'
   | 'end_report'
+  | 'odometer_review'
 
 export default function App() {
   const [user, setUser] = useState<AppUser | null>(null)
@@ -54,6 +55,7 @@ export default function App() {
             if (key === 'assess_objectives') setScreen('objectives')
             if (key === 'achievements') setScreen('achievements')
             if (key === 'end_journey') setScreen('end_report')
+            if (key === 'odometer_review') setScreen('odometer_review')
           }}
           welcomeName={user.username}
         />
@@ -93,6 +95,9 @@ export default function App() {
 
       {screen === 'end_report' && (
         <EndJourneyReport currentUser={user} onBack={() => setScreen('home')} />
+      )}
+      {screen === 'odometer_review' && (
+        <OdometerReview currentUser={user} onBack={() => setScreen('home')} />
       )}
     </>
   )

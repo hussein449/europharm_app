@@ -13,6 +13,8 @@
     "@supabase/supabase-js": "^2.75.0",
     "bcryptjs": "^3.0.2",
     "expo": "~54.0.12",
+    "expo-file-system": "~19.0.17",
+    "expo-image-picker": "~17.0.8",
     "expo-location": "~19.0.7",
     "expo-status-bar": "~3.0.8",
     "expo-task-manager": "~14.0.7",

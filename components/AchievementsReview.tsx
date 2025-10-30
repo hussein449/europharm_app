@@ -1,9 +1,10 @@
 // components/AchievementsReview.tsx
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   View, Text, StyleSheet, Pressable, ActivityIndicator,
-  ScrollView, RefreshControl
+  ScrollView, RefreshControl, useWindowDimensions
 } from 'react-native'
+import type { ViewStyle } from 'react-native'
 import { supabase } from '../lib/supabase'
 
 type Visit = {
@@ -22,8 +23,19 @@ type Props = {
 type RangeMode = 'day' | 'week'
 type StatusTab = 'all' | 'planned' | 'done'
 
+// helper: typed % width for RN styles (fixes TS error on `${string}%`)
+function fillWidth(pct: number): ViewStyle {
+  const p = Math.max(0, Math.min(100, Math.round(pct * 100)))
+  return { width: `${p}%` } as ViewStyle
+}
+
 export default function AchievementsReview({ onBack, currentUser }: Props) {
   const username = currentUser?.username ?? 'hussein'
+
+  // --- responsive flags ---
+  const { width } = useWindowDimensions()
+  const isWide = width >= 900
+  const isXL = width >= 1280
 
   // range state
   const [mode, setMode] = useState<RangeMode>('week')
@@ -48,7 +60,7 @@ export default function AchievementsReview({ onBack, currentUser }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [tab, setTab] = useState<StatusTab>('all')
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setErrorMsg(null)
     try {
       const { data, error } = await supabase
@@ -74,15 +86,15 @@ export default function AchievementsReview({ onBack, currentUser }: Props) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [range.start, range.end, username])
 
-  useEffect(() => { load() }, [username, range.start.getTime(), range.end.getTime()])
+  useEffect(() => { load() }, [load])
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true)
     await load()
     setRefreshing(false)
-  }
+  }, [load])
 
   // ---- metrics: ALWAYS computed from ALL rows (not filtered by tab) ----
   const metrics = useMemo(() => {
@@ -90,7 +102,6 @@ export default function AchievementsReview({ onBack, currentUser }: Props) {
     let done = 0
     const dayMap = new Map<string, { planned: number; done: number }>()
 
-    // ensure we show all 7 days in week mode even if empty
     if (mode === 'week') {
       const s = startOfWeekMonday(anchor)
       for (let i = 0; i < 7; i++) {
@@ -136,162 +147,161 @@ export default function AchievementsReview({ onBack, currentUser }: Props) {
   }, [rows, tab])
 
   // ---- nav handlers ----
-  const prev = () => {
-    if (mode === 'day') {
-      const d = new Date(anchor); d.setDate(anchor.getDate() - 1); setAnchor(d)
-    } else {
-      const d = new Date(anchor); d.setDate(anchor.getDate() - 7); setAnchor(d)
-    }
-  }
-  const next = () => {
-    if (mode === 'day') {
-      const d = new Date(anchor); d.setDate(anchor.getDate() + 1); setAnchor(d)
-    } else {
-      const d = new Date(anchor); d.setDate(anchor.getDate() + 7); setAnchor(d)
-    }
-  }
+  const prev = useCallback(() => {
+    setAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() - (mode === 'day' ? 1 : 7)))
+  }, [mode])
+
+  const next = useCallback(() => {
+    setAnchor(d => new Date(d.getFullYear(), d.getMonth(), d.getDate() + (mode === 'day' ? 1 : 7)))
+  }, [mode])
 
   return (
     <View style={styles.screen}>
-      {/* Top bar */}
-      <View style={styles.appBar}>
-        <Pressable onPress={onBack} style={styles.backBtn}><Text style={styles.backIcon}>‹</Text></Pressable>
-        <Text style={styles.title}>Achievements Review</Text>
-        <View style={{ width: 40 }} />
-      </View>
+      {/* Centered container on wide screens */}
+      <View style={[
+        styles.container,
+        isXL && { maxWidth: 1200 },
+        isWide && !isXL && { maxWidth: 1000 }
+      ]}>
 
-      {/* Range controls */}
-      <View style={styles.controls}>
-        <View style={styles.modeRow}>
-          {(['day','week'] as const).map(m => (
-            <Pressable
-              key={m}
-              onPress={() => setMode(m)}
-              style={[styles.modePill, mode === m ? styles.modeOn : styles.modeOff]}
-            >
-              <Text style={mode === m ? styles.modeTxtOn : styles.modeTxtOff}>{m.toUpperCase()}</Text>
-            </Pressable>
-          ))}
-          <View style={{ flex: 1 }} />
-          <Pressable onPress={prev} style={styles.navBtn}><Text style={styles.navTxt}>‹</Text></Pressable>
-          <Text style={styles.rangeLabel}>{range.label}</Text>
-          <Pressable onPress={next} style={styles.navBtn}><Text style={styles.navTxt}>›</Text></Pressable>
+        {/* Top bar */}
+        <View style={[
+          styles.appBar,
+          isWide && { paddingHorizontal: 24, paddingTop: 22, paddingBottom: 14 }
+        ]}>
+          <Pressable onPress={onBack} style={styles.backBtn}><Text style={styles.backIcon}>‹</Text></Pressable>
+          <Text style={[styles.title, isWide && { fontSize: 20 } ]}>Achievements Review</Text>
+          <View style={{ width: 40 }} />
         </View>
 
-        {/* status filter (affects list only) */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 10 }}>
-          {(['all','planned','done'] as StatusTab[]).map(s => (
-            <Pressable
-              key={s}
-              onPress={() => setTab(s)}
-              style={[styles.pill, tab === s ? styles.pillOn : styles.pillOff]}
-            >
-              <Text style={tab === s ? styles.pillTxtOn : styles.pillTxtOff}>
-                {s.toUpperCase()}
-              </Text>
-            </Pressable>
-          ))}
+        {/* Range + Filters */}
+        <View style={[
+          styles.controls,
+          isWide && { paddingHorizontal: 24, paddingTop: 14, paddingBottom: 10 }
+        ]}>
+          <View style={[styles.modeRow, isWide && { gap: 10 }]}>
+            {(['day','week'] as const).map(m => (
+              <Pressable
+                key={m}
+                onPress={() => setMode(m)}
+                style={[styles.modePill, mode === m ? styles.modeOn : styles.modeOff, isWide && { height: 36 }]}
+              >
+                <Text style={mode === m ? styles.modeTxtOn : styles.modeTxtOff}>{m.toUpperCase()}</Text>
+              </Pressable>
+            ))}
+            <View style={{ flex: 1 }} />
+            <Pressable onPress={prev} style={[styles.navBtn, isWide && { height: 36, width: 40 }]}><Text style={styles.navTxt}>‹</Text></Pressable>
+            <Text style={[styles.rangeLabel, isWide && { fontSize: 15 }]}>{range.label}</Text>
+            <Pressable onPress={next} style={[styles.navBtn, isWide && { height: 36, width: 40 }]}><Text style={styles.navTxt}>›</Text></Pressable>
+          </View>
+
+          {/* status filter (affects list only) */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 10 }}>
+            {(['all','planned','done'] as StatusTab[]).map(s => (
+              <Pressable
+                key={s}
+                onPress={() => setTab(s)}
+                style={[styles.pill, tab === s ? styles.pillOn : styles.pillOff, isWide && { height: 36 }]}
+              >
+                <Text style={tab === s ? styles.pillTxtOn : styles.pillTxtOff}>
+                  {s.toUpperCase()}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+
+        {/* Stat Cards */}
+        <View style={[
+          styles.statsRow,
+          isWide && { paddingHorizontal: 24, gap: 14 }
+        ]}>
+          <StatCard title="Attendance Days" value={String(metrics.attendanceDays)} desc="Days with at least one completed visit" tone="blue" />
+          <StatCard title="Planned"         value={String(metrics.plannedTotal)}   desc="Scheduled or in-progress"             tone="slate" />
+          <StatCard title="Completed"       value={String(metrics.doneTotal)}      desc="Visits finished"                     tone="green" />
+          <StatCard title="Completion"      value={`${Math.round(metrics.completionRate * 100)}%`} desc="Done / (Planned + Done)" tone="indigo" />
+        </View>
+
+        {/* Content area — responsive split */}
+        <ScrollView
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          contentContainerStyle={[
+            { paddingHorizontal: 16, paddingBottom: 28 },
+            isWide && { paddingHorizontal: 24 }
+          ]}
+        >
+          <View style={[styles.contentRow, isWide && { flexDirection: 'row', gap: 16 }]}>
+            {/* Left: per-day table */}
+            <View style={[styles.contentCol, isWide && { flex: 3 }]}>
+              <View style={styles.table}>
+                <View style={styles.thead}>
+                  <Text style={[styles.th, { flex: 1.4 }]}>{mode === 'day' ? 'Date' : 'Day'}</Text>
+                  <Text style={[styles.th, { flex: 0.8, textAlign: 'center' }]}>Planned</Text>
+                  <Text style={[styles.th, { flex: 0.8, textAlign: 'center' }]}>Done</Text>
+                  <Text style={[styles.th, { flex: 3 }]}>Progress</Text>
+                </View>
+
+                {loading ? (
+                  <View style={{ padding: 16, alignItems: 'center' }}>
+                    <ActivityIndicator />
+                  </View>
+                ) : errorMsg ? (
+                  <View style={{ padding: 16 }}>
+                    <Text style={{ color: '#b91c1c', fontWeight: '800' }}>{errorMsg}</Text>
+                    <Pressable onPress={load} style={[styles.btn, styles.btnPrimary, { marginTop: 10, alignSelf: 'flex-start' }]}>
+                      <Text style={styles.btnPrimaryText}>Retry</Text>
+                    </Pressable>
+                  </View>
+                ) : metrics.perDay.length === 0 ? (
+                  <View style={{ padding: 16 }}>
+                    <Text style={{ color: '#6b7280' }}>No visits in this range.</Text>
+                  </View>
+                ) : (
+                  metrics.perDay.map(row => {
+                    const total = row.planned + row.done
+                    const pct = total > 0 ? Math.min(1, row.done / total) : 0
+                    return (
+                      <View key={row.date} style={styles.tr}>
+                        <Text style={[styles.td, { flex: 1.4 }]}>{mode === 'day' ? row.date : row.label}</Text>
+                        <Text style={[styles.td, { flex: 0.8, textAlign: 'center' }]}>{row.planned}</Text>
+                        <Text style={[styles.td, { flex: 0.8, textAlign: 'center' }]}>{row.done}</Text>
+                        <View style={[styles.cell, { flex: 3 }]}>
+                          <View style={styles.barBg}>
+                            <View style={[styles.barFill, fillWidth(pct)]} />
+                          </View>
+                        </View>
+                      </View>
+                    )
+                  })
+                )}
+              </View>
+            </View>
+
+            {/* Right: detailed list (filtered by tab) */}
+            <View style={[styles.contentCol, isWide && { flex: 2 }]}>
+              {!loading && !errorMsg && visible.length > 0 && (
+                <View style={{ marginTop: isWide ? 0 : 14 }}>
+                  <Text style={[styles.listTitle, isWide && { fontSize: 15 }]}>Visits</Text>
+                  {groupByDate(visible, mode).map(group => (
+                    <View key={group.date} style={{ marginTop: 8 }}>
+                      {mode === 'week' && <Text style={styles.groupHead}>{group.date}</Text>}
+                      {group.items.map(v => (
+                        <View key={v.id} style={styles.visitCard}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.vClient} numberOfLines={1}>{v.client_name || '—'}</Text>
+                            <Text style={styles.vMeta} numberOfLines={1}>{v.visit_date}</Text>
+                          </View>
+                          <StatusChip status={v.status} />
+                        </View>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          </View>
         </ScrollView>
       </View>
-
-      {/* Stat Cards (always based on ALL rows in range) */}
-      <View style={styles.statsRow}>
-        <StatCard
-          title="Attendance Days"
-          value={String(metrics.attendanceDays)}
-          desc="Days with at least one completed visit"
-          tone="blue"
-        />
-        <StatCard
-          title="Planned"
-          value={String(metrics.plannedTotal)}
-          desc="Scheduled or in-progress"
-          tone="slate"
-        />
-        <StatCard
-          title="Completed"
-          value={String(metrics.doneTotal)}
-          desc="Visits finished"
-          tone="green"
-        />
-        <StatCard
-          title="Completion"
-          value={`${Math.round(metrics.completionRate * 100)}%`}
-          desc="Done / (Planned + Done)"
-          tone="indigo"
-        />
-      </View>
-
-      {/* Table + Visit list */}
-      <ScrollView
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28 }}
-      >
-        {/* per-day aggregated progress (still based on ALL rows) */}
-        <View style={styles.table}>
-          <View style={styles.thead}>
-            <Text style={[styles.th, { flex: 1.4 }]}>{mode === 'day' ? 'Date' : 'Day'}</Text>
-            <Text style={[styles.th, { flex: 0.8, textAlign: 'center' }]}>Planned</Text>
-            <Text style={[styles.th, { flex: 0.8, textAlign: 'center' }]}>Done</Text>
-            <Text style={[styles.th, { flex: 3 }]}>Progress</Text>
-          </View>
-
-          {loading ? (
-            <View style={{ padding: 16, alignItems: 'center' }}>
-              <ActivityIndicator />
-            </View>
-          ) : errorMsg ? (
-            <View style={{ padding: 16 }}>
-              <Text style={{ color: '#b91c1c', fontWeight: '800' }}>{errorMsg}</Text>
-              <Pressable onPress={load} style={[styles.btn, styles.btnPrimary, { marginTop: 10, alignSelf: 'flex-start' }]}>
-                <Text style={styles.btnPrimaryText}>Retry</Text>
-              </Pressable>
-            </View>
-          ) : metrics.perDay.length === 0 ? (
-            <View style={{ padding: 16 }}>
-              <Text style={{ color: '#6b7280' }}>No visits in this range.</Text>
-            </View>
-          ) : (
-            metrics.perDay.map(row => {
-              const total = row.planned + row.done
-              const pct = total > 0 ? Math.min(1, row.done / total) : 0
-              return (
-                <View key={row.date} style={styles.tr}>
-                  <Text style={[styles.td, { flex: 1.4 }]}>{mode === 'day' ? row.date : row.label}</Text>
-                  <Text style={[styles.td, { flex: 0.8, textAlign: 'center' }]}>{row.planned}</Text>
-                  <Text style={[styles.td, { flex: 0.8, textAlign: 'center' }]}>{row.done}</Text>
-                  <View style={[styles.td, { flex: 3 }]}>
-                    <View style={styles.barBg}>
-                      <View style={[styles.barFill, { width: `${pct * 100}%` }]} />
-                    </View>
-                  </View>
-                </View>
-              )
-            })
-          )}
-        </View>
-
-        {/* detailed visits (filtered by tab) */}
-        {!loading && !errorMsg && visible.length > 0 && (
-          <View style={{ marginTop: 14 }}>
-            <Text style={styles.listTitle}>Visits</Text>
-            {groupByDate(visible, mode).map(group => (
-              <View key={group.date} style={{ marginTop: 8 }}>
-                {mode === 'week' && <Text style={styles.groupHead}>{group.date}</Text>}
-                {group.items.map(v => (
-                  <View key={v.id} style={styles.visitCard}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.vClient} numberOfLines={1}>{v.client_name || '—'}</Text>
-                      <Text style={styles.vMeta} numberOfLines={1}>{v.visit_date}</Text>
-                    </View>
-                    <StatusChip status={v.status} />
-                  </View>
-                ))}
-              </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
     </View>
   )
 }
@@ -381,6 +391,13 @@ function StatCard({ title, value, desc, tone }:{
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#f6f7fb' },
 
+  // centers content on large screens
+  container: {
+    flex: 1,
+    alignSelf: 'center',
+    width: '100%',
+  },
+
   appBar: {
     paddingTop: 18, paddingBottom: 12, paddingHorizontal: 16,
     backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#edf0f5',
@@ -432,6 +449,14 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 24, fontWeight: '900', marginTop: 8 },
   statDesc: { fontSize: 12, color: '#475569', marginTop: 4 },
 
+  // responsive split area
+  contentRow: {
+    flexDirection: 'column',
+  },
+  contentCol: {
+    flex: 1,
+  },
+
   table: {
     borderRadius: 16, borderWidth: 1, borderColor: '#edf0f5', backgroundColor: '#fff',
     // @ts-ignore rn-web
@@ -442,7 +467,12 @@ const styles = StyleSheet.create({
   th: { fontSize: 12, fontWeight: '800', color: '#475569' },
 
   tr: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+
+  // Text-only style (use on <Text> elements)
   td: { fontSize: 13, color: '#0f172a' },
+
+  // View-only style (use on <View> cells)
+  cell: {},
 
   barBg: { height: 10, backgroundColor: '#e5e7eb', borderRadius: 999, overflow: 'hidden' },
   barFill: { height: 10, backgroundColor: '#16a34a' },
