@@ -1,3 +1,4 @@
+
 import { useRef, useState } from 'react';
 import {
   View,
@@ -16,7 +17,9 @@ import { supabase } from '../europharm_app/lib/supabase'; // keep your working p
 import bcrypt from 'bcryptjs';
 
 // ✅ IMPORT YOUR LOGO (adjust the relative path if needed)
-import logo from './logo/logo.png';
+// @ts-ignore
+const logo = require('./assets/logo.png');
+
 
 function deriveDisplayName(u: any, fallbackUsername: string): string {
   const tryFields = [

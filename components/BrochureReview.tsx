@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   View, Text, TextInput, Pressable, StyleSheet, ScrollView,
   useWindowDimensions, ActivityIndicator, Platform, Alert,
+  Linking, // ⬅️ Using Linking from 'react-native'
 } from 'react-native'
 import { supabase } from '../lib/supabase'
 
@@ -134,6 +135,7 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
   }
 
   /** ---------- Open / Download helpers ---------- */
+  // --- WEB only helpers ---
   const openInNewTabWeb = (url: string) => {
     // @ts-ignore
     window.open(url, '_blank', 'noopener,noreferrer')
@@ -148,17 +150,14 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
     a.click()
     a.remove()
   }
+  // --- END WEB only helpers ---
 
   const openLink = (url: string) => {
     if (!url) return
-    if (Platform.OS === 'web') {
-      openInNewTabWeb(url)
-    } else {
-      const Linking = require('react-native').Linking
-      Linking.openURL(url).catch(() => {
-        Alert.alert('Unable to open file', 'Your device could not open this link.')
-      })
-    }
+    Linking.openURL(url).catch((err: any) => { // ⬅️ Fixed implicit 'any' error here
+      console.error('Linking failed to open URL:', err)
+      Alert.alert('Unable to open file', 'Your device could not open this link.')
+    })
   }
 
   const handleOpen = async (b: Brochure) => {
@@ -166,21 +165,25 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
     if (!ok) return
 
     if (b.download_url && b.download_url !== '#') {
-      openLink(b.download_url)
+      // Use the direct URL for opening on all platforms
+      if (Platform.OS === 'web') {
+        openInNewTabWeb(b.download_url)
+      } else {
+        openLink(b.download_url)
+      }
       return
     }
 
     if (b.file_data) {
       if (Platform.OS === 'web') {
+        // Base64 is generally only readable directly in the browser
         openInNewTabWeb(b.file_data)
       } else {
-        const Linking = require('react-native').Linking
-        Linking.openURL(b.file_data).catch(() => {
-          Alert.alert(
-            'Unable to open file',
-            'This brochure only has an embedded file. Opening data URLs may not be supported on this device.'
-          )
-        })
+        // Base64/Data URLs are not reliably supported by native Linking, alert user
+        Alert.alert(
+          'No Direct Link',
+          'This brochure only has embedded file data. You may need to use a browser to open this on mobile.'
+        )
       }
       return
     }
@@ -197,28 +200,24 @@ export default function BrochureReview({ onBack, currentRepName }: Props) {
     const fileName = `${safeTitle}.${ext}`
 
     if (Platform.OS === 'web') {
-      if (b.file_data) {
-        downloadWeb(b.file_data, fileName)
+      const urlToDownload = b.download_url && b.download_url !== '#' ? b.download_url : b.file_data
+      if (urlToDownload) {
+        downloadWeb(urlToDownload, fileName)
         return
       }
-      if (b.download_url && b.download_url !== '#') {
-        downloadWeb(b.download_url, fileName) // relies on server headers for forced download
-        return
-      }
-      Alert.alert('No file', 'This brochure has no URL or file data to download.')
     } else {
+      // For Native (iOS/Android), we must rely ONLY on download_url
       if (b.download_url && b.download_url !== '#') {
-        const Linking = require('react-native').Linking
-        Linking.openURL(b.download_url).catch(() => {
-          Alert.alert('Unable to download', 'Your device could not open this link.')
-        })
+        // Opening the URL on native often forces a download or opens a viewer
+        openLink(b.download_url)
         return
       }
-      Alert.alert(
-        'No file',
-        'This brochure has no direct URL to download on this platform. Saving base64 requires a native file-system integration.'
-      )
     }
+
+    Alert.alert(
+      'No file',
+      'This brochure has no URL suitable for a cross-platform download.'
+    )
   }
 
   const categories = useMemo(() => {

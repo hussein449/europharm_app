@@ -1,7 +1,9 @@
 // App.tsx
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { StatusBar } from 'expo-status-bar'
+import { View, StyleSheet } from 'react-native'
 
+// Screens
 import HomeScreen from './components/HomeScreen'
 import LoginScreen from './login'
 import ProspectsList from './components/ProspectsList'
@@ -13,6 +15,7 @@ import ObjectivesScreen from './components/ObjectivesScreen'
 import AchievementsReview from './components/AchievementsReview'
 import EndJourneyReport from './components/EndJourneyReport'
 import OdometerReview from './components/OdometerReview'
+
 export type AppUser = { id: string; username: string }
 
 type Screen =
@@ -40,65 +43,59 @@ export default function App() {
     )
   }
 
+  const goHome = () => setScreen('home')
+
+  const ScreenMap: Record<Screen, ReactNode> = {
+    home: (
+      <HomeScreen
+        onSelect={(key) => {
+          const map: Record<string, Screen> = {
+            prospects: 'prospects',
+            products: 'products',
+            brochures: 'brochures',
+            opportunities: 'visits',
+            summary: 'summary',
+            assess_objectives: 'objectives',
+            achievements: 'achievements',
+            end_journey: 'end_report',
+            odometer_review: 'odometer_review',
+          }
+          const next = map[key]
+          if (next) setScreen(next)
+        }}
+        welcomeName={user.username}
+      />
+    ),
+
+    prospects: <ProspectsList onBack={goHome} />,
+    products: <ProductsReview currentUserName={user.username} onBack={goHome} />,
+    brochures: <BrochureReview currentRepName={user.username} onBack={goHome} />,
+    visits: <VisitsSchedule currentUser={user} onBack={goHome} />,
+    summary: <SummaryScreen currentUser={user} onBack={goHome} />,
+    objectives: <ObjectivesScreen currentUser={user} onBack={goHome} />,
+    achievements: <AchievementsReview currentUser={user} onBack={goHome} />,
+    end_report: <EndJourneyReport currentUser={user} onBack={goHome} />,
+    odometer_review: <OdometerReview currentUser={user} onBack={goHome} />,
+  }
+
   return (
-    <>
+    <AppContainer>
       <StatusBar style="dark" />
-
-      {screen === 'home' && (
-        <HomeScreen
-          onSelect={(key) => {
-            if (key === 'prospects') setScreen('prospects')
-            if (key === 'products') setScreen('products')
-            if (key === 'brochures') setScreen('brochures')
-            if (key === 'opportunities') setScreen('visits')
-            if (key === 'summary') setScreen('summary')
-            if (key === 'assess_objectives') setScreen('objectives')
-            if (key === 'achievements') setScreen('achievements')
-            if (key === 'end_journey') setScreen('end_report')
-            if (key === 'odometer_review') setScreen('odometer_review')
-          }}
-          welcomeName={user.username}
-        />
-      )}
-
-      {screen === 'summary' && (
-        <SummaryScreen currentUser={user} onBack={() => setScreen('home')} />
-      )}
-
-      {screen === 'objectives' && (
-        <ObjectivesScreen currentUser={user} onBack={() => setScreen('home')} />
-      )}
-
-      {screen === 'achievements' && (
-        <AchievementsReview currentUser={user} onBack={() => setScreen('home')} />
-      )}
-
-      {screen === 'prospects' && (
-        <ProspectsList onBack={() => setScreen('home')} />
-      )}
-
-      {screen === 'products' && (
-        // ✅ pass the username so ProductsReview can filter movements immediately
-        <ProductsReview
-          onBack={() => setScreen('home')}
-          currentUserName={user.username}
-        />
-      )}
-
-      {screen === 'brochures' && (
-        <BrochureReview onBack={() => setScreen('home')} currentRepName={user.username} />
-      )}
-
-      {screen === 'visits' && (
-        <VisitsSchedule currentUser={user} onBack={() => setScreen('home')} />
-      )}
-
-      {screen === 'end_report' && (
-        <EndJourneyReport currentUser={user} onBack={() => setScreen('home')} />
-      )}
-      {screen === 'odometer_review' && (
-        <OdometerReview currentUser={user} onBack={() => setScreen('home')} />
-      )}
-    </>
+      {ScreenMap[screen]}
+    </AppContainer>
   )
 }
+
+/* --- Layout Wrapper --- */
+function AppContainer({ children }: { children: ReactNode }) {
+  return <View style={styles.container}>{children}</View>
+}
+
+/* --- Global Styling --- */
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingTop: 28,
+  },
+})

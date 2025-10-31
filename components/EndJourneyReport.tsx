@@ -117,16 +117,21 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
   const showSearch = false
 
   const normalize = (data: any[]): VisitRow[] =>
-    (data ?? []).map((r: any) => ({
-      id: String(r.id),
-      visit_date: String(r.visit_date ?? '').slice(0, 10),
-      client_name: String(r.client_name ?? '—'),
-      visited_by: r.visited_by ?? null,
-      status: r.status ?? null,
-      note_type: r.note_type ?? null,
-      notes: r.notes ?? null,
-      sample_distributed: Number.isFinite(r.sample_distributed) ? r.sample_distributed : (r.sample_distributed ?? 0),
-    }))
+    (data ?? []).map((r: any) => {
+      const sd = r.sample_distributed
+      const normalizedSample: number | null =
+        typeof sd === 'number' && Number.isFinite(sd) ? sd : null // PRESERVE null vs 0; don't coerce null→0
+      return {
+        id: String(r.id),
+        visit_date: String(r.visit_date ?? '').slice(0, 10),
+        client_name: String(r.client_name ?? '—'),
+        visited_by: r.visited_by ?? null,
+        status: r.status ?? null,
+        note_type: r.note_type ?? null,
+        notes: r.notes ?? null,
+        sample_distributed: normalizedSample,
+      }
+    })
 
   const load = async (range?: { start: string; end: string }) => {
     const useStart = range?.start ?? startDate
@@ -233,7 +238,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
     return m
   }, [rows])
 
-  // totals per user (DB field OR parsed)
+  // totals per user (DB field OR parsed) — prefer DB when not null, else parsed
   const totals = useMemo(() => {
     const obj: Record<string, { visits: number; samples: number }> = {}
     for (const [u, list] of byUser.entries()) {
@@ -241,7 +246,7 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
         visits: list.length,
         samples: list.reduce((sum, v) => {
           const parsed = parseSamplesFromNotes(v.notes)
-          const eff = (v.sample_distributed ?? 0) || parsed.total
+          const eff = v.sample_distributed != null ? v.sample_distributed : parsed.total
           return sum + (eff || 0)
         }, 0),
       }
@@ -372,8 +377,9 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
                   <View style={{ paddingHorizontal: 8, paddingBottom: 10 }}>
                     {byUser.get(u)!.map(v => {
                       const parsed = parseSamplesFromNotes(v.notes)
-                      const effectiveTotal = (v.sample_distributed ?? 0) || parsed.total
-                      const hasSamples = effectiveTotal > 0
+                      // FIX: prefer DB value when not null, else parsed total
+                      const effectiveTotal = v.sample_distributed != null ? v.sample_distributed : parsed.total
+                      const hasSamples = (effectiveTotal || 0) > 0
                       return (
                         <Pressable
                           key={v.id}
@@ -415,7 +421,8 @@ export default function EndJourneyReport({ onBack, currentUser }: Props) {
             <Text style={styles.modalTitle}>Visit Details</Text>
             {selected ? (() => {
               const parsed = parseSamplesFromNotes(selected.notes)
-              const effectiveTotal = (selected.sample_distributed ?? 0) || parsed.total
+              // FIX: prefer DB value when not null, else parsed total
+              const effectiveTotal = selected.sample_distributed != null ? selected.sample_distributed : parsed.total
               return (
                 <View style={{ gap: 8 }}>
                   <DetailRow label="Client" value={selected.client_name || '—'} />

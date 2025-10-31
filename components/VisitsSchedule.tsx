@@ -726,6 +726,10 @@ export default function VisitsSchedule({ onBack, currentUser }: Props) {
   )
 }
 
+
+
+
+
 /* ---- Smaller components ---- */
 function Calendar({ year, month, prevMonth, nextMonth, selectedDay, onSelectDay, byDate, loading, errorMsg, reload }: any) {
   const daysGrid = buildCalendarGrid(year, month)
@@ -921,8 +925,32 @@ function StatusChip({ status }: { status: 'planned' | 'en_route' | 'done' | 'ski
 }
 
 const styles = StyleSheet.create({
+  // --- Responsive additions ---
+  responsiveFooter: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#edf0f5',
+    backgroundColor: '#fff',
+    flexDirection: 'row',
+  },
+  floatingAddBtn: {
+    position: 'absolute',
+    right: 24,
+    bottom: 24,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#10b981', // Add button color
+    // @ts-ignore rn-web
+    boxShadow: '0 8px 20px rgba(16, 185, 129, 0.4)',
+  },
+
+  // --- Original Styles (Modified for responsiveness) ---
   screen: { flex: 1, backgroundColor: '#f6f7fb' },
 
+  // AppBar and Header components are fine as they scale horizontally naturally
   appBar: {
     paddingTop: 18, paddingBottom: 12, paddingHorizontal: 16,
     backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#edf0f5',
@@ -934,6 +962,7 @@ const styles = StyleSheet.create({
   backIcon: { fontSize: 26, lineHeight: 26, color: '#111827' },
   title: { fontSize: 18, textAlign: 'center', fontWeight: '800', color: '#0f172a', flex: 1 },
 
+  // Calendar Wrapper - Padding remains, but container width is controlled by the component logic above
   calendarWrap: { padding: 16 },
   calHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   navBtn: { width: 38, height: 38, borderRadius: 10, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center' },
@@ -943,6 +972,7 @@ const styles = StyleSheet.create({
   weekHeader: { flexDirection: 'row', gap: 6, marginTop: 6, marginBottom: 6 },
   weekHeadTxt: { flex: 1, textAlign: 'center', fontSize: 12, color: '#6b7280', fontWeight: '800' },
 
+  // Grid and Cell are the most important for responsiveness here
   grid: {
     borderRadius: 16, borderWidth: 1, borderColor: '#edf0f5', backgroundColor: '#fff',
     // @ts-ignore rn-web
@@ -950,8 +980,11 @@ const styles = StyleSheet.create({
     padding: 8,
   },
   row: { flexDirection: 'row', gap: 6, marginBottom: 6 },
+  // Key change: flex: 1 makes this cell take up an equal share of space in the row
   cell: {
-    flex: 1, height: 56, borderRadius: 12, borderWidth: 1, borderColor: '#eef0f3',
+    flex: 1,
+    height: 56, // Fixed height is often fine for calendar cells
+    borderRadius: 12, borderWidth: 1, borderColor: '#eef0f3',
     alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', padding: 4,
   },
   cellMuted: { opacity: 0.45 },
@@ -965,6 +998,7 @@ const styles = StyleSheet.create({
   listHead: { paddingHorizontal: 16, paddingBottom: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
   listTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', flex: 1 },
 
+  // Buttons (Unchanged, fixed height is usually fine for buttons)
   startBtn: {
     height: 40, paddingHorizontal: 14, borderRadius: 999,
     alignItems: 'center', justifyContent: 'center', backgroundColor: '#2563eb',
@@ -990,6 +1024,7 @@ const styles = StyleSheet.create({
   },
   weekBtnTxt: { color: '#fff', fontWeight: '900', fontSize: 12 },
 
+  // Card (Uses flex: 1 internally for text content to wrap)
   card: {
     marginTop: 10, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: '#eef0f3',
     backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -1016,12 +1051,15 @@ const styles = StyleSheet.create({
   btnGhost: { backgroundColor: '#fff' },
   btnGhostText: { color: '#111827', fontWeight: '800' },
 
+  // Modal (Key change: using maxWidth for responsiveness)
   modalOverlay: {
     position: 'absolute', inset: 0, backgroundColor: 'rgba(0,0,0,0.3)',
     alignItems: 'center', justifyContent: 'center', padding: 16,
   },
   modal: {
-    width: '100%', maxWidth: 560, backgroundColor: '#fff', borderRadius: 16,
+    width: '100%',
+    maxWidth: 560, // Enforce a max width for large screens
+    backgroundColor: '#fff', borderRadius: 16,
     padding: 16, gap: 10,
     // @ts-ignore rn-web
     boxShadow: '0 16px 40px rgba(0,0,0,0.18)',
